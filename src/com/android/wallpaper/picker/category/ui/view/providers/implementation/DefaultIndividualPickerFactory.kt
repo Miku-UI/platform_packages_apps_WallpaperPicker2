@@ -17,8 +17,9 @@
 package com.android.wallpaper.picker.category.ui.view.providers.implementation
 
 import androidx.fragment.app.Fragment
+import com.android.wallpaper.model.Screen
 import com.android.wallpaper.picker.category.ui.view.providers.IndividualPickerFactory
-import com.android.wallpaper.picker.category.ui.viewmodel.CategoriesViewModel
+import com.android.wallpaper.picker.customization.shared.model.CategoryType
 import com.android.wallpaper.picker.individual.IndividualPickerFragment2
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,14 +27,14 @@ import javax.inject.Singleton
 @Singleton
 /** This class provides the correct IndividualPickerFragment for WPP2 */
 class DefaultIndividualPickerFactory @Inject constructor() : IndividualPickerFactory {
-    override fun getIndividualPickerInstance(collectionId: String): Fragment {
-        return IndividualPickerFragment2.newInstance(collectionId)
-    }
-
     override fun getIndividualPickerInstance(
         collectionId: String,
-        categoryType: CategoriesViewModel.CategoryType
+        categoryType: CategoryType,
+        destinationScreen: Screen?,
     ): Fragment {
-        return IndividualPickerFragment2.newInstance(collectionId)
+        return IndividualPickerFragment2.newInstance(
+            collectionId = collectionId,
+            destinationScreen = destinationScreen,
+        )
     }
 }

@@ -16,6 +16,7 @@
 
 package com.android.wallpaper.picker.preview.ui.viewmodel
 
+import android.app.Application
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.platform.test.annotations.DisableFlags
@@ -25,6 +26,9 @@ import androidx.test.core.app.ActivityScenario
 import com.android.wallpaper.module.InjectorProvider
 import com.android.wallpaper.module.NetworkStatusNotifier
 import com.android.wallpaper.picker.category.ui.viewmodel.CategoriesViewModel
+import com.android.wallpaper.picker.customization.shared.model.CategoryType
+import com.android.wallpaper.picker.data.category.CategoryModel
+import com.android.wallpaper.picker.data.category.CommonCategoryData
 import com.android.wallpaper.picker.preview.PreviewTestActivity
 import com.android.wallpaper.testing.TestInjector
 import com.android.wallpaper.testing.TestNetworkStatusNotifier
@@ -37,6 +41,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -109,6 +114,20 @@ class CategoriesViewModelTest {
     }
 
     @Test
+    fun refetchPackThemeCategoryReceiver_registerCorrectReceiver() = runTest {
+        val shadowApplication = Shadows.shadowOf(appContext as Application)
+        categoriesViewModel.refetchPackThemeCategoryReceiver()
+        delay(10)
+
+        val registeredReceiver =
+            shadowApplication.registeredReceivers.find {
+                it.intentFilter.countActions() > 0 &&
+                    it.intentFilter.getAction(0) == REFETCH_PACK_THEME_CATEGORY_ACTION
+            }
+        assertThat(registeredReceiver).isNotNull()
+    }
+
+    @Test
     @DisableFlags(com.android.systemui.shared.Flags.FLAG_NEW_CUSTOMIZATION_PICKER_UI)
     fun sections_verifyTilesInMyPhotosCategory() = runTest {
         val sections = collectLastValue(categoriesViewModel.sections)()
@@ -161,12 +180,21 @@ class CategoriesViewModelTest {
 
                 onClick()
 
+                val expectedCategoryModel =
+                    CategoryModel(
+                        CommonCategoryData(
+                            EXPECTED_TITLE_PHOTO_TILE,
+                            CATEGORY_ID_CELESTIAL_DREAMSCAPES,
+                            1,
+                        )
+                    )
+
                 testDispatcher.scheduler.advanceUntilIdle()
                 assertThat(collectedValues[0])
                     .isEqualTo(
                         CategoriesViewModel.NavigationEvent.NavigateToWallpaperCollection(
-                            CATEGORY_ID_CELESTIAL_DREAMSCAPES,
-                            CategoriesViewModel.CategoryType.DefaultCategories,
+                            expectedCategoryModel,
+                            CategoryType.DefaultCategories,
                         )
                     )
 
@@ -185,11 +213,20 @@ class CategoriesViewModelTest {
 
                 testDispatcher.scheduler.advanceUntilIdle()
 
+                val expectedCategoryModel =
+                    CategoryModel(
+                        CommonCategoryData(
+                            EXPECTED_TITLE_CYBER_PUNK,
+                            CATEGORY_ID_CYBERPUNK_CITYSCAPE,
+                            7,
+                        )
+                    )
+
                 assertThat(collectedValues[0])
                     .isEqualTo(
                         CategoriesViewModel.NavigationEvent.NavigateToWallpaperCollection(
-                            CATEGORY_ID_CYBERPUNK_CITYSCAPE,
-                            CategoriesViewModel.CategoryType.DefaultCategories,
+                            expectedCategoryModel,
+                            CategoryType.DefaultCategories,
                         )
                     )
                 job.cancelAndJoin()
@@ -203,13 +240,21 @@ class CategoriesViewModelTest {
                         categoriesViewModel.navigationEvents.collect { collectedValues.add(it) }
                     }
 
+                val expectedCategoryModel =
+                    CategoryModel(
+                        CommonCategoryData(
+                            EXPECTED_TITLE_COSMIC_NEBULA,
+                            CATEGORY_ID_COSMIC_NEBULA,
+                            9,
+                        )
+                    )
                 onClick()
                 testDispatcher.scheduler.advanceUntilIdle()
                 assertThat(collectedValues[0])
                     .isEqualTo(
                         CategoriesViewModel.NavigationEvent.NavigateToWallpaperCollection(
-                            CATEGORY_ID_COSMIC_NEBULA,
-                            CategoriesViewModel.CategoryType.DefaultCategories,
+                            expectedCategoryModel,
+                            CategoryType.DefaultCategories,
                         )
                     )
                 job.cancelAndJoin()
@@ -264,7 +309,7 @@ class CategoriesViewModelTest {
      * replaced with fakes of the repositories or their data sources.
      */
     companion object {
-        const val EXPECTED_NUMBER_OF_SECTIONS = 21
+        const val EXPECTED_NUMBER_OF_SECTIONS = 22
 
         const val EXPECTED_POSITION_CREATIVE_CATEGORY = 0
         const val EXPECTED_SIZE_CREATIVE_CATEGORY = 2
@@ -277,8 +322,10 @@ class CategoriesViewModelTest {
         const val EXPECTED_SIZE_MY_PHOTOS_CATEGORY = 1
         const val EXPECTED_POSITION_PHOTO_TILE = 0
         const val EXPECTED_TITLE_PHOTO_TILE = "Celestial Dreamscape"
+        const val EXPECTED_TITLE_CYBER_PUNK = "Cyberpunk Cityscape"
+        const val EXPECTED_TITLE_COSMIC_NEBULA = "Cosmic Nebula"
 
-        const val EXPECTED_POSITION_SINGLE_CATEGORIES = 2
+        const val EXPECTED_POSITION_SINGLE_CATEGORIES = 3
         const val EXPECTED_SIZE_SINGLE_CATEGORIES = 19
         const val EXPECTED_SIZE_SINGLE_CATEGORY_TILES = 1
 
@@ -289,5 +336,8 @@ class CategoriesViewModelTest {
         const val CATEGORY_INDEX_CELESTIAL_DREAMSCAPES = 0
         const val CATEGORY_INDEX_CYBERPUNK_CITYSCAPE = 6
         const val CATEGORY_INDEX_COSMIC_NEBULA = 8
+
+        const val REFETCH_PACK_THEME_CATEGORY_ACTION =
+            "com.google.android.apps.wallpaper.action.REFETCH_PACK_THEME_CATEGORY_ACTION"
     }
 }

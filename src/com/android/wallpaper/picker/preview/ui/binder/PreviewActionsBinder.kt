@@ -15,17 +15,12 @@
  */
 package com.android.wallpaper.picker.preview.ui.binder
 
-import android.app.Activity.RESULT_OK
 import android.app.AlertDialog
-import android.app.Flags.liveWallpaperContentHandling
-import android.app.wallpaper.WallpaperDescription
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.view.View
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
-import androidx.activity.result.contract.ActivityResultContract
 import androidx.constraintlayout.motion.widget.MotionLayout
 import androidx.core.view.isInvisible
 import androidx.fragment.app.FragmentActivity
@@ -35,10 +30,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.android.wallpaper.R
 import com.android.wallpaper.config.BaseFlags
-import com.android.wallpaper.model.WallpaperInfoContract
 import com.android.wallpaper.model.wallpaper.DeviceDisplayType
 import com.android.wallpaper.module.logging.UserEventLogger
-import com.android.wallpaper.picker.preview.ui.util.ContentHandlingUtil
 import com.android.wallpaper.picker.preview.ui.util.ImageEffectDialogUtil
 import com.android.wallpaper.picker.preview.ui.view.ImageEffectDialog
 import com.android.wallpaper.picker.preview.ui.view.PreviewActionFloatingSheet
@@ -52,6 +45,7 @@ import com.android.wallpaper.picker.preview.ui.viewmodel.Action.INFORMATION
 import com.android.wallpaper.picker.preview.ui.viewmodel.Action.SHARE
 import com.android.wallpaper.picker.preview.ui.viewmodel.PreviewActionsViewModel
 import com.android.wallpaper.picker.preview.ui.viewmodel.WallpaperPreviewViewModel
+import com.android.wallpaper.util.ExtendedWallpaperEffectsUtils
 import com.android.wallpaper.widget.floatingsheetcontent.WallpaperActionsToggleAdapter
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_HIDDEN
@@ -59,8 +53,6 @@ import kotlinx.coroutines.launch
 
 /** Binds the action buttons and bottom sheet to [PreviewActionsViewModel] */
 object PreviewActionsBinder {
-
-    private const val PREVIEW_RESULT_REGISTRY = "preview_result_registry"
 
     fun bind(
         actionGroup: PreviewActionGroup,
@@ -83,39 +75,12 @@ object PreviewActionsBinder {
         var onBackPressedCallback: OnBackPressedCallback? = null
 
         val extendedWallpaperEffectActivityLauncher =
-            activity.activityResultRegistry.register(
-                PREVIEW_RESULT_REGISTRY,
+            ExtendedWallpaperEffectsUtils.registerExtendedWallpaperEffectsActivityLauncher(
+                activity,
                 lifecycleOwner,
-                object : ActivityResultContract<Intent, Int>() {
-                    override fun createIntent(context: Context, input: Intent): Intent {
-                        return input
-                    }
-
-                    override fun parseResult(resultCode: Int, intent: Intent?): Int {
-                        if (liveWallpaperContentHandling()) {
-                            if (resultCode == RESULT_OK) {
-                                previewViewModel.wallpaper.value?.let {
-                                    ContentHandlingUtil.updatePreview(
-                                        context = actionGroup.context.applicationContext,
-                                        wallpaperModel = it,
-                                        wallpaperDescription =
-                                            intent
-                                                ?.extras
-                                                ?.getParcelable(
-                                                    WallpaperInfoContract
-                                                        .WALLPAPER_DESCRIPTION_CONTENT_HANDLING,
-                                                    WallpaperDescription::class.java,
-                                                ),
-                                    ) { wallpaperModel ->
-                                        previewViewModel.setPreviewWallpaperModel(wallpaperModel)
-                                    }
-                                }
-                            }
-                        }
-                        return resultCode
-                    }
-                },
-            ) {}
+                previewViewModel,
+                actionGroup.context.applicationContext,
+            )
 
         val floatingSheetCallback =
             object : BottomSheetBehavior.BottomSheetCallback() {
@@ -415,48 +380,26 @@ object PreviewActionsBinder {
                             ) = floatingSheetViewModel
                             when {
                                 informationViewModel != null -> {
-                                    if (liveWallpaperContentHandling()) {
-                                        floatingSheet.setInformationContent(
-                                            description = informationViewModel.description,
-                                            attributions = informationViewModel.attributions,
-                                            onExploreButtonClickListener =
-                                                (informationViewModel.description?.contextUri
-                                                        ?: informationViewModel.actionUrl?.let {
-                                                            Uri.parse(it)
-                                                        })
-                                                    ?.let { uri ->
-                                                        {
-                                                            logger
-                                                                .logWallpaperExploreButtonClicked()
-                                                            floatingSheet.context.startActivity(
-                                                                Intent(Intent.ACTION_VIEW, uri)
-                                                            )
-                                                        }
-                                                    },
-                                            actionButtonTitle =
-                                                informationViewModel.description?.contextDescription
-                                                    ?: informationViewModel.actionButtonTitle,
-                                        )
-                                    } else {
-                                        floatingSheet.setInformationContent(
-                                            description = null,
-                                            attributions = informationViewModel.attributions,
-                                            onExploreButtonClickListener =
-                                                informationViewModel.actionUrl?.let { url ->
+                                    floatingSheet.setInformationContent(
+                                        description = informationViewModel.description,
+                                        attributions = informationViewModel.attributions,
+                                        onExploreButtonClickListener =
+                                            (informationViewModel.description?.contextUri
+                                                    ?: informationViewModel.actionUrl?.let {
+                                                        Uri.parse(it)
+                                                    })
+                                                ?.let { uri ->
                                                     {
                                                         logger.logWallpaperExploreButtonClicked()
                                                         floatingSheet.context.startActivity(
-                                                            Intent(
-                                                                Intent.ACTION_VIEW,
-                                                                Uri.parse(url),
-                                                            )
+                                                            Intent(Intent.ACTION_VIEW, uri)
                                                         )
                                                     }
                                                 },
-                                            actionButtonTitle =
-                                                informationViewModel.actionButtonTitle,
-                                        )
-                                    }
+                                        actionButtonTitle =
+                                            informationViewModel.description?.contextDescription
+                                                ?: informationViewModel.actionButtonTitle,
+                                    )
                                 }
                                 imageEffectViewModel != null ->
                                     floatingSheet.setImageEffectContent(

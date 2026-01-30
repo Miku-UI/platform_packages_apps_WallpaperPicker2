@@ -16,7 +16,6 @@
 
 package com.android.wallpaper.picker.preview.domain.interactor
 
-import android.app.Flags.liveWallpaperContentHandling
 import android.app.WallpaperColors
 import android.content.Context
 import android.graphics.Bitmap
@@ -24,6 +23,8 @@ import android.graphics.Point
 import android.graphics.Rect
 import android.net.Uri
 import android.util.Log
+import com.android.customization.picker.clock.shared.ClockSize
+import com.android.customization.picker.clock.shared.ClockSize.Companion.getPreferredClockSize
 import com.android.wallpaper.asset.Asset
 import com.android.wallpaper.model.CreativeCategory
 import com.android.wallpaper.model.CreativeWallpaperInfo
@@ -43,7 +44,9 @@ import com.android.wallpaper.util.wallpaperconnection.WallpaperConnectionUtils
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.android.scopes.ActivityRetainedScoped
 import javax.inject.Inject
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 
 @ActivityRetainedScoped
 class WallpaperPreviewInteractor
@@ -58,6 +61,16 @@ constructor(
 
     val hasSmallPreviewTooltipBeenShown: StateFlow<Boolean> =
         wallpaperPreviewRepository.hasSmallPreviewTooltipBeenShown
+
+    /** The preferred clock size of the current preview wallpaper, if any */
+    val preferredClockSize: Flow<ClockSize?> =
+        wallpaperModel.map {
+            (it as? LiveWallpaperModel)
+                ?.liveWallpaperData
+                ?.description
+                ?.content
+                ?.getPreferredClockSize()
+        }
 
     fun hideSmallPreviewTooltip() = wallpaperPreviewRepository.hideSmallPreviewTooltip()
 
@@ -115,41 +128,39 @@ constructor(
         wallpaperModel: LiveWallpaperModel,
         wallpaperConnectionUtils: WallpaperConnectionUtils,
     ): LiveWallpaperModel? {
-        if (liveWallpaperContentHandling()) {
-            try {
-                wallpaperConnectionUtils.applyWallpaper(destination, wallpaperModel)?.let {
-                    val description =
-                        if (it.component != null) {
-                            it
-                        } else {
-                            it.toBuilder()
-                                .setComponent(
-                                    wallpaperModel.liveWallpaperData.systemWallpaperInfo.component
-                                )
-                                .build()
-                        }
-                    val sourceLiveData = wallpaperModel.liveWallpaperData
-                    val updatedLiveData =
-                        LiveWallpaperData(
-                            sourceLiveData.groupName,
-                            sourceLiveData.systemWallpaperInfo,
-                            sourceLiveData.isTitleVisible,
-                            sourceLiveData.isApplied,
-                            sourceLiveData.isEffectWallpaper,
-                            sourceLiveData.effectNames,
-                            sourceLiveData.contextDescription,
-                            description,
-                        )
-                    return LiveWallpaperModel(
-                        wallpaperModel.commonWallpaperData,
-                        updatedLiveData,
-                        wallpaperModel.creativeWallpaperData,
-                        wallpaperModel.internalLiveWallpaperData,
+        try {
+            wallpaperConnectionUtils.applyWallpaper(destination, wallpaperModel)?.let {
+                val description =
+                    if (it.component != null) {
+                        it
+                    } else {
+                        it.toBuilder()
+                            .setComponent(
+                                wallpaperModel.liveWallpaperData.systemWallpaperInfo.component
+                            )
+                            .build()
+                    }
+                val sourceLiveData = wallpaperModel.liveWallpaperData
+                val updatedLiveData =
+                    LiveWallpaperData(
+                        sourceLiveData.groupName,
+                        sourceLiveData.systemWallpaperInfo,
+                        sourceLiveData.isTitleVisible,
+                        sourceLiveData.isApplied,
+                        sourceLiveData.isEffectWallpaper,
+                        sourceLiveData.effectNames,
+                        sourceLiveData.contextDescription,
+                        description,
                     )
-                }
-            } catch (e: NoSuchMethodException) {
-                // Deliberate no-op, this means the apply function was not found
+                return LiveWallpaperModel(
+                    wallpaperModel.commonWallpaperData,
+                    updatedLiveData,
+                    wallpaperModel.creativeWallpaperData,
+                    wallpaperModel.internalLiveWallpaperData,
+                )
             }
+        } catch (e: NoSuchMethodException) {
+            // Deliberate no-op, this means the apply function was not found
         }
 
         return wallpaperModel.creativeWallpaperData?.let {

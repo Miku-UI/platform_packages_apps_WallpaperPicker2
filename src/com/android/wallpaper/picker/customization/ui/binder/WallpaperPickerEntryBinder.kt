@@ -17,29 +17,59 @@
 package com.android.wallpaper.picker.customization.ui.binder
 
 import android.content.res.ColorStateList
+import android.widget.TextView
+import androidx.compose.ui.platform.ComposeView
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.constraintlayout.widget.ConstraintSet
 import androidx.core.graphics.drawable.DrawableCompat
+import androidx.core.view.isVisible
 import androidx.core.widget.TextViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.RecyclerView
+import com.android.wallpaper.R
+import com.android.wallpaper.config.BaseFlags
 import com.android.wallpaper.model.Screen
+import com.android.wallpaper.module.logging.UserEventLogger
 import com.android.wallpaper.picker.category.ui.view.adapter.CuratedPhotosAdapter
 import com.android.wallpaper.picker.category.ui.view.adapter.LoadingAnimationAdapter
+import com.android.wallpaper.picker.customization.shared.model.CategoryType
+import com.android.wallpaper.picker.customization.ui.compose.desktop.WallpaperCarouselDesktop
 import com.android.wallpaper.picker.customization.ui.view.WallpaperPickerEntry
-import com.android.wallpaper.picker.customization.ui.view.listener.WallpaperCarouselScrollListener
+import com.android.wallpaper.picker.customization.ui.view.listener.CarouselHorizontalScrollEnforcer
+import com.android.wallpaper.picker.customization.ui.view.listener.WallpaperTitleScrollListener
 import com.android.wallpaper.picker.customization.ui.viewmodel.ColorUpdateViewModel
 import com.android.wallpaper.picker.customization.ui.viewmodel.CustomizationPickerViewModel2
 import com.android.wallpaper.picker.customization.ui.viewmodel.WallpaperCarouselViewModel
+import com.android.wallpaper.picker.customization.ui.viewmodel.WallpaperCarouselViewModel.NavigationEvent.NavigateToExtendedWallpaperEffects
 import com.android.wallpaper.picker.customization.ui.viewmodel.WallpaperCarouselViewModel.NavigationEvent.NavigateToPreviewScreen
 import com.android.wallpaper.picker.customization.ui.viewmodel.WallpaperCarouselViewModel.NavigationEvent.NavigateToWallpaperCollection
 import com.android.wallpaper.picker.data.WallpaperModel
+import com.android.wallpaper.util.CuratedPhotosTimeUtil
 import com.google.android.material.carousel.CarouselLayoutManager
 import com.google.android.material.carousel.CarouselSnapHelper
 import kotlinx.coroutines.launch
 
 object WallpaperPickerEntryBinder {
+    private const val DESKTOP_CAROUSEL_ITEMS_COUNT = 5
+
+    private class CustomScrollableCarouselLayoutManager : CarouselLayoutManager() {
+        private var isScrollable = false
+
+        override fun canScrollHorizontally(): Boolean {
+            return if (isScrollable) super.canScrollHorizontally() else false
+        }
+
+        override fun canScrollVertically(): Boolean {
+            return false
+        }
+
+        fun setIsScrollable(isScrollable: Boolean) {
+            this.isScrollable = isScrollable
+        }
+    }
 
     fun bind(
         view: WallpaperPickerEntry,
@@ -47,20 +77,59 @@ object WallpaperPickerEntryBinder {
         colorUpdateViewModel: ColorUpdateViewModel,
         lifecycleOwner: LifecycleOwner,
         navigateToWallpaperCategoriesScreen: (screen: Screen) -> Unit,
-        navigateToPreviewScreen: ((wallpaperModel: WallpaperModel) -> Unit)?,
+        navigateToPreviewScreen:
+            ((wallpaperModel: WallpaperModel, setWallpaperEntryPoint: Int) -> Unit)?,
+        navigateToWallpaperCollectionScreen:
+            ((collectionId: String, categoryType: CategoryType) -> Unit)?,
+        navigateToExtendedWallpaperEffects: (() -> Unit)?,
+        curatedPhotosTimeUtil: CuratedPhotosTimeUtil,
+        userEventLogger: UserEventLogger,
     ) {
         val isOnMainScreen = {
             viewModel.customizationOptionsViewModel.selectedOption.value == null
         }
+        val wallpaperCarouselViewModel =
+            viewModel.customizationOptionsViewModel.wallpaperCarouselViewModel
 
-        bindWallpaperCarousel(
-            wallpaperCarousel = view.wallpaperCarousel,
-            viewModel = viewModel.customizationOptionsViewModel.wallpaperCarouselViewModel,
-            colorUpdateViewModel = colorUpdateViewModel,
-            shouldAnimateColor = isOnMainScreen,
+        bindNavigationEvents(
+            viewModel = wallpaperCarouselViewModel,
             lifecycleOwner = lifecycleOwner,
             navigateToPreviewScreen = navigateToPreviewScreen,
+            navigateToWallpaperCollectionScreen = navigateToWallpaperCollectionScreen,
+            navigateToExtendedWallpaperEffects = navigateToExtendedWallpaperEffects,
         )
+
+        val shouldShowDesktopUi = BaseFlags.get().shouldShowDesktopUi(view.context)
+
+        if (shouldShowDesktopUi) {
+            bindWallpaperCarouselDesktop(
+                wallpaperPickerEntryView = view,
+                viewModel = wallpaperCarouselViewModel,
+                lifecycleOwner = lifecycleOwner,
+                curatedPhotosTimeUtil = curatedPhotosTimeUtil,
+                userEventLogger = userEventLogger,
+            )
+        } else {
+            bindWallpaperCarousel(
+                wallpaperPickerEntryView = view,
+                viewModel = wallpaperCarouselViewModel,
+                colorUpdateViewModel = colorUpdateViewModel,
+                shouldAnimateColor = isOnMainScreen,
+                lifecycleOwner = lifecycleOwner,
+                curatedPhotosTimeUtil = curatedPhotosTimeUtil,
+                userEventLogger = userEventLogger,
+            )
+
+            bindWallpaperPickerEntryLabels(
+                container =
+                    view.requireViewById<ConstraintLayout>(
+                        R.id.wallpaper_picker_entry_expanded_container
+                    ),
+                suggestedPhotosLabel = view.suggestedPhotosText,
+                viewModel = viewModel.customizationOptionsViewModel.wallpaperCarouselViewModel,
+                lifecycleOwner = lifecycleOwner,
+            )
+        }
 
         lifecycleOwner.lifecycleScope.launch {
             lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -70,6 +139,11 @@ object WallpaperPickerEntryBinder {
                     }
                     view.moreWallpapersButton.setOnClickListener {
                         navigateToWallpaperCategoriesScreen.invoke(previewScreen)
+                    }
+                    if (shouldShowDesktopUi) {
+                        view.suggestedPhotosText.setOnClickListener {
+                            navigateToWallpaperCategoriesScreen.invoke(previewScreen)
+                        }
                     }
                 }
             }
@@ -86,16 +160,6 @@ object WallpaperPickerEntryBinder {
 
         ColorUpdateBinder.bind(
             setColor = { color ->
-                view.moreWallpapersButton.setTextColor(color)
-                view.collapsedButton.setTextColor(color)
-            },
-            color = colorUpdateViewModel.colorPrimary,
-            shouldAnimate = isOnMainScreen,
-            lifecycleOwner = lifecycleOwner,
-        )
-
-        ColorUpdateBinder.bind(
-            setColor = { color ->
                 TextViewCompat.setCompoundDrawableTintList(
                     view.moreWallpapersButton,
                     ColorStateList.valueOf(color),
@@ -104,8 +168,9 @@ object WallpaperPickerEntryBinder {
                     view.collapsedButton,
                     ColorStateList.valueOf(color),
                 )
+                view.collapsedButton.setTextColor(color)
             },
-            color = colorUpdateViewModel.colorOnPrimaryContainer,
+            color = colorUpdateViewModel.colorPrimary,
             shouldAnimate = isOnMainScreen,
             lifecycleOwner = lifecycleOwner,
         )
@@ -118,14 +183,69 @@ object WallpaperPickerEntryBinder {
         )
     }
 
+    /**
+     * Sets up the RecyclerView's LayoutManager and attaches mode-specific listeners based on
+     * whether the application is in desktop mode.
+     */
+    private fun setupWallpaperCarouselRecyclerView(recyclerView: RecyclerView) {
+        // Mobile/Tablet mode: Use CustomScrollableCarouselLayoutManager to enable carousel
+        // experience.
+        recyclerView.layoutManager = CustomScrollableCarouselLayoutManager()
+        if (recyclerView.onFlingListener == null) {
+            CarouselSnapHelper().attachToRecyclerView(recyclerView)
+        }
+        val horizontalScrollEnforcer = CarouselHorizontalScrollEnforcer(recyclerView.context)
+        recyclerView.addOnScrollListener(horizontalScrollEnforcer)
+        recyclerView.addOnItemTouchListener(horizontalScrollEnforcer)
+        recyclerView.isNestedScrollingEnabled = false
+    }
+
+    private fun bindNavigationEvents(
+        viewModel: WallpaperCarouselViewModel,
+        lifecycleOwner: LifecycleOwner,
+        navigateToPreviewScreen:
+            ((wallpaperModel: WallpaperModel, setWallpaperEntryPoint: Int) -> Unit)?,
+        navigateToWallpaperCollectionScreen:
+            ((collectionId: String, categoryType: CategoryType) -> Unit)?,
+        navigateToExtendedWallpaperEffects: (() -> Unit)?,
+    ) {
+        lifecycleOwner.lifecycleScope.launch {
+            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // Collect and handle navigation events once.
+                viewModel.navigationEvents.collect {
+                    navigationEvent: WallpaperCarouselViewModel.NavigationEvent ->
+                    when (navigationEvent) {
+                        is NavigateToWallpaperCollection -> {
+                            navigateToWallpaperCollectionScreen?.invoke(
+                                navigationEvent.categoryId,
+                                navigationEvent.categoryType,
+                            )
+                        }
+                        is NavigateToPreviewScreen -> {
+                            navigateToPreviewScreen?.invoke(
+                                navigationEvent.wallpaperModel,
+                                navigationEvent.entryPoint,
+                            )
+                        }
+                        is NavigateToExtendedWallpaperEffects -> {
+                            navigateToExtendedWallpaperEffects?.invoke()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun bindWallpaperCarousel(
-        wallpaperCarousel: RecyclerView,
+        wallpaperPickerEntryView: WallpaperPickerEntry,
         viewModel: WallpaperCarouselViewModel,
         colorUpdateViewModel: ColorUpdateViewModel,
         shouldAnimateColor: () -> Boolean,
         lifecycleOwner: LifecycleOwner,
-        navigateToPreviewScreen: ((wallpaperModel: WallpaperModel) -> Unit)?,
+        curatedPhotosTimeUtil: CuratedPhotosTimeUtil,
+        userEventLogger: UserEventLogger,
     ) {
+        val wallpaperCarousel: RecyclerView = wallpaperPickerEntryView.wallpaperCarousel ?: return
         lifecycleOwner.lifecycleScope.launch {
             lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
@@ -135,53 +255,128 @@ object WallpaperPickerEntryBinder {
                             colorUpdateViewModel = colorUpdateViewModel,
                             shouldAnimateColor = shouldAnimateColor,
                             lifecycleOwner = lifecycleOwner,
+                            curatedPhotosTimeUtil = curatedPhotosTimeUtil,
+                            userEventLogger = userEventLogger,
                         )
-                    /** Custom layout manager that allows disabling scrolling when loading */
-                    val customLayoutManager =
-                        object : CarouselLayoutManager() {
-                            private var isScrollable = false
+                    wallpaperCarousel.adapter = loadingAnimationAdapter
 
-                            override fun canScrollHorizontally(): Boolean {
-                                return if (isScrollable) super.canScrollHorizontally() else false
-                            }
+                    setupWallpaperCarouselRecyclerView(wallpaperCarousel)
 
-                            fun setIsScrollable(isScrollable: Boolean) {
-                                this.isScrollable = isScrollable
+                    viewModel.wallpaperCarouselItems.collect {
+                        wallpaperPickerEntryView.post {
+                            if (it.isEmpty()) {
+                                wallpaperPickerEntryView.animateToCollapsed()
                             }
                         }
-                    wallpaperCarousel.apply {
-                        adapter = loadingAnimationAdapter
-                        layoutManager = customLayoutManager
-                    }
-                    viewModel.wallpaperCarouselItems.collect {
+
                         wallpaperCarousel.swapAdapter(
-                            CuratedPhotosAdapter(it),
+                            CuratedPhotosAdapter(it, curatedPhotosTimeUtil, userEventLogger),
                             /** removeAndRecycleExistingViews= */
                             false,
                         )
-                        customLayoutManager.setIsScrollable(true)
-                        wallpaperCarousel.addOnScrollListener(WallpaperCarouselScrollListener())
-                        if (wallpaperCarousel.onFlingListener == null) {
-                            CarouselSnapHelper().attachToRecyclerView(wallpaperCarousel)
+
+                        // Enable scrolling for the carousel only for mobile/tablet mode.
+                        if (!it.isEmpty() && it.get(0).showTitle) {
+                            wallpaperCarousel.addOnScrollListener(WallpaperTitleScrollListener())
                         }
+                        (wallpaperCarousel.layoutManager as? CustomScrollableCarouselLayoutManager)
+                            ?.setIsScrollable(true)
                     }
                 }
+            }
+        }
+    }
 
+    private fun bindWallpaperCarouselDesktop(
+        wallpaperPickerEntryView: WallpaperPickerEntry,
+        viewModel: WallpaperCarouselViewModel,
+        lifecycleOwner: LifecycleOwner,
+        curatedPhotosTimeUtil: CuratedPhotosTimeUtil,
+        userEventLogger: UserEventLogger,
+    ) {
+        val wallpaperCarouselDesktop: ComposeView =
+            wallpaperPickerEntryView.wallpaperCarouselDesktop ?: return
+
+        lifecycleOwner.lifecycleScope.launch {
+            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    viewModel.navigationEvents.collect {
-                        navigationEvent: WallpaperCarouselViewModel.NavigationEvent ->
-                        when (navigationEvent) {
-                            is NavigateToWallpaperCollection -> {
-                                // TODO (b/398250531): implement navigation to creative
-                                // category collection page
+                    viewModel.wallpaperCarouselItems.collect { items ->
+                        wallpaperPickerEntryView.post {
+                            if (items.isEmpty()) {
+                                wallpaperPickerEntryView.animateToCollapsed()
                             }
-                            is NavigateToPreviewScreen -> {
-                                navigateToPreviewScreen?.invoke(navigationEvent.wallpaperModel)
-                            }
+                        }
+                        wallpaperCarouselDesktop.setContent {
+                            WallpaperCarouselDesktop(
+                                items = items,
+                                curatedPhotosTimeUtil = curatedPhotosTimeUtil,
+                                userEventLogger = userEventLogger,
+                            )
                         }
                     }
                 }
             }
         }
+    }
+
+    private fun bindWallpaperPickerEntryLabels(
+        container: ConstraintLayout,
+        suggestedPhotosLabel: TextView,
+        viewModel: WallpaperCarouselViewModel,
+        lifecycleOwner: LifecycleOwner,
+    ) {
+        lifecycleOwner.lifecycleScope.launch {
+            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.shouldShowSuggestedPhotosLabel.collect {
+                        suggestedPhotosLabel.isVisible = it
+                        if (it) {
+                            applyEndAlignedConstraints(container)
+                        } else {
+                            applyCenteredConstraints(container)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun applyEndAlignedConstraints(
+        wallpaperPickerEntryExpandedContainer: ConstraintLayout
+    ) {
+        val constraintSet = ConstraintSet()
+        constraintSet.clone(wallpaperPickerEntryExpandedContainer)
+
+        constraintSet.clear(R.id.more_wallpapers_button, ConstraintSet.START)
+        constraintSet.connect(
+            R.id.more_wallpapers_button,
+            ConstraintSet.END,
+            ConstraintSet.PARENT_ID,
+            ConstraintSet.END,
+        )
+
+        constraintSet.applyTo(wallpaperPickerEntryExpandedContainer)
+    }
+
+    private fun applyCenteredConstraints(wallpaperPickerEntryExpandedContainer: ConstraintLayout) {
+        val constraintSet = ConstraintSet()
+        constraintSet.clone(wallpaperPickerEntryExpandedContainer)
+
+        constraintSet.clear(R.id.more_wallpapers_button, ConstraintSet.END)
+        constraintSet.connect(
+            R.id.more_wallpapers_button,
+            ConstraintSet.START,
+            ConstraintSet.PARENT_ID,
+            ConstraintSet.START,
+        )
+        constraintSet.connect(
+            R.id.more_wallpapers_button,
+            ConstraintSet.END,
+            ConstraintSet.PARENT_ID,
+            ConstraintSet.END,
+        )
+        constraintSet.setHorizontalBias(R.id.more_wallpapers_button, 0.5f)
+
+        constraintSet.applyTo(wallpaperPickerEntryExpandedContainer)
     }
 }

@@ -15,7 +15,6 @@
  */
 package com.android.wallpaper.picker.preview.ui.view
 
-import android.app.Flags.liveWallpaperContentHandling
 import android.app.wallpaper.WallpaperDescription
 import android.content.Context
 import android.net.Uri
@@ -34,7 +33,6 @@ import com.android.wallpaper.R
 import com.android.wallpaper.config.BaseFlags
 import com.android.wallpaper.effects.EffectsController.EffectEnumInterface
 import com.android.wallpaper.model.WallpaperAction
-import com.android.wallpaper.util.SizeCalculator
 import com.android.wallpaper.widget.floatingsheetcontent.WallpaperActionSelectionBottomSheet
 import com.android.wallpaper.widget.floatingsheetcontent.WallpaperActionsToggleAdapter
 import com.android.wallpaper.widget.floatingsheetcontent.WallpaperActionsToggleAdapter.WallpaperEffectSwitchListener
@@ -61,7 +59,6 @@ class PreviewActionFloatingSheet(context: Context, attrs: AttributeSet?) :
             else R.layout.floating_sheet2
         LayoutInflater.from(context).inflate(layout, this, true)
         floatingSheetView = requireViewById(R.id.floating_sheet_content)
-        SizeCalculator.adjustBackgroundCornerRadius(floatingSheetView)
         floatingSheetContainer = requireViewById(R.id.floating_sheet_container)
         floatingSheetBehavior = BottomSheetBehavior.from(floatingSheetContainer)
         floatingSheetBehavior.state = BottomSheetBehavior.STATE_HIDDEN
@@ -131,7 +128,7 @@ class PreviewActionFloatingSheet(context: Context, attrs: AttributeSet?) :
         val exploreButton: Button = view.requireViewById(R.id.wallpaper_info_explore_button)
 
         val combinedAttributions = attributions?.toMutableList() ?: mutableListOf()
-        if (liveWallpaperContentHandling() && description != null) {
+        if (description != null) {
             description.title.let {
                 if (!it.isNullOrEmpty()) {
                     combinedAttributions[0] = it.toString()

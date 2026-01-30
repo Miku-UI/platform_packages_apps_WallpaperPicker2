@@ -59,6 +59,7 @@ android_library {
         "flexbox",
         "hilt_android",
         "accessibility_settings_flags_lib",
+        "WindowManager-Shell-shared-AOSP",
         // Compose
         "PlatformComposeCore",
         "androidx.activity_activity-compose",
@@ -78,11 +79,11 @@ android_library {
         "grpc-java-core-internal",
         "grpc-java-stub",
         "grpc-java-binder",
+        "PlatformComposeSceneTransitionLayout",
     ],
 
     resource_dirs: [
         "res",
-        "res_override",
     ],
 
     srcs: [

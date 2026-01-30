@@ -54,4 +54,10 @@ data class OptionItemViewModel2<Payload>(
 
     /** Notifies that the option has been long-clicked by the user. */
     val onLongClicked: (() -> Unit)? = null,
+
+    /** Whether onClicked binding should be skipped. */
+    val skipOnClickBinding: Boolean = false,
+
+    /** Whether foreground color binding should be skipped. */
+    val skipForegroundColorBinding: Boolean = false,
 )

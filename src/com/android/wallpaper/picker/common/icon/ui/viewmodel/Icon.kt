@@ -17,26 +17,23 @@
 
 package com.android.wallpaper.picker.common.icon.ui.viewmodel
 
+import android.content.Context
 import android.graphics.drawable.Drawable
 import androidx.annotation.DrawableRes
+import androidx.appcompat.content.res.AppCompatResources
 import com.android.wallpaper.picker.common.text.ui.viewmodel.Text
 
-sealed class Icon(
-    open val contentDescription: Text?,
-) {
-    data class Resource(
-        @DrawableRes val res: Int,
-        override val contentDescription: Text?,
-    ) :
-        Icon(
-            contentDescription = contentDescription,
-        )
+sealed class Icon(open val contentDescription: Text?) {
+    data class Resource(@DrawableRes val res: Int, override val contentDescription: Text?) :
+        Icon(contentDescription = contentDescription)
 
-    data class Loaded(
-        val drawable: Drawable,
-        override val contentDescription: Text?,
-    ) :
-        Icon(
-            contentDescription = contentDescription,
-        )
+    data class Loaded(val drawable: Drawable, override val contentDescription: Text?) :
+        Icon(contentDescription = contentDescription)
+
+    fun getDrawable(context: Context): Drawable? {
+        return when (this) {
+            is Resource -> AppCompatResources.getDrawable(context.applicationContext, this.res)
+            is Loaded -> this.drawable
+        }
+    }
 }

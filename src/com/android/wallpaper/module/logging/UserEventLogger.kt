@@ -20,12 +20,14 @@ import android.stats.style.StyleEnums
 import androidx.annotation.IntDef
 import com.android.wallpaper.module.WallpaperPersister
 import com.android.wallpaper.module.WallpaperPersister.Destination
+import com.android.wallpaper.picker.customization.ui.util.CustomizationOptionUtil.CustomizationOption
+import io.grpc.Status
 
 /** Interface for logging user events in the wallpaper picker. */
 interface UserEventLogger {
 
     /** Logs the current snapshot data, e.g. the currently-set home and lock screen wallpapers. */
-    fun logSnapshot()
+    suspend fun logSnapshot()
 
     /** Logs when the app is launched */
     fun logAppLaunched(launchSource: Intent)
@@ -63,6 +65,53 @@ interface UserEventLogger {
     /** Logs when clicking the explore button in the wallpaper information dialog. */
     fun logWallpaperExploreButtonClicked()
 
+    /** Log when entering a screen */
+    fun logEnterScreen(@CustomizationPickerScreen screen: Int)
+
+    /** Log when curated photos are rendered in carousel */
+    fun logCuratedPhotosRendered(timeElapsedMillis: Long, userPhoto: Boolean)
+
+    /** Log when curated photos are fetched in carousel */
+    fun logCuratedPhotosFetched(timeElapsedMillis: Long, status: Status)
+
+    /** Map a [CustomizationOption] to a picker screen. */
+    @CustomizationPickerScreen
+    fun transformCustomizationOptionToScreenForLogging(
+        customizationOption: CustomizationOption
+    ): Int
+
+    @IntDef(
+        StyleEnums.LOCATION_PREFERENCE_UNSPECIFIED,
+        StyleEnums.LOCATION_UNAVAILABLE,
+        StyleEnums.LOCATION_CURRENT,
+        StyleEnums.LOCATION_MANUAL,
+    )
+    @Retention(AnnotationRetention.SOURCE)
+    annotation class LocationPreference
+
+    @IntDef(
+        StyleEnums.DATE_PREFERENCE_UNSPECIFIED,
+        StyleEnums.DATE_UNAVAILABLE,
+        StyleEnums.DATE_MANUAL,
+    )
+    @Retention(AnnotationRetention.SOURCE)
+    annotation class DatePreference
+
+    @IntDef(
+        StyleEnums.LAUNCHED_PREFERENCE_UNSPECIFIED,
+        StyleEnums.LAUNCHED_LAUNCHER,
+        StyleEnums.LAUNCHED_SETTINGS,
+        StyleEnums.LAUNCHED_SUW,
+        StyleEnums.LAUNCHED_TIPS,
+        StyleEnums.LAUNCHED_LAUNCH_ICON,
+        StyleEnums.LAUNCHED_CROP_AND_SET_ACTION,
+        StyleEnums.LAUNCHED_DEEP_LINK,
+        StyleEnums.LAUNCHED_SETTINGS_SEARCH,
+        StyleEnums.LAUNCHED_KEYGUARD,
+    )
+    @Retention(AnnotationRetention.SOURCE)
+    annotation class LaunchedPreference
+
     /**
      * Possible actions for cinematic effect. These actions would be used for effect apply, effect
      * probe, effect download.
@@ -73,14 +122,14 @@ interface UserEventLogger {
         StyleEnums.EFFECT_APPLIED_ON_FAILED,
         StyleEnums.EFFECT_APPLIED_OFF,
         StyleEnums.EFFECT_APPLIED_ABORTED,
-        StyleEnums.EFFECT_APPLIED_STARTED
+        StyleEnums.EFFECT_APPLIED_STARTED,
     )
     @Retention(AnnotationRetention.SOURCE)
     annotation class EffectStatus
 
     /**
-     * Possible actions for cinematic effect. These actions would be used for effect apply, effect
-     * probe, effect download.
+     * Possible actions for setting a wallpaper. These actions denote the source from where
+     * wallpaper is applied.
      */
     @IntDef(
         StyleEnums.SET_WALLPAPER_ENTRY_POINT_UNSPECIFIED,
@@ -90,6 +139,8 @@ interface UserEventLogger {
         StyleEnums.SET_WALLPAPER_ENTRY_POINT_ROTATION_WALLPAPER,
         StyleEnums.SET_WALLPAPER_ENTRY_POINT_RESET,
         StyleEnums.SET_WALLPAPER_ENTRY_POINT_RESTORE,
+        StyleEnums.SET_WALLPAPER_ENTRY_POINT_WALLPAPER_PREVIEW_SUGGESTED_PHOTOS_HOME_SCREEN,
+        StyleEnums.SET_WALLPAPER_ENTRY_POINT_WALLPAPER_PREVIEW_SUGGESTED_PHOTOS_CATEGORY_SCREEN,
     )
     @Retention(AnnotationRetention.SOURCE)
     annotation class SetWallpaperEntryPoint
@@ -102,6 +153,17 @@ interface UserEventLogger {
     )
     @Retention(AnnotationRetention.SOURCE)
     annotation class WallpaperDestination
+
+    @IntDef(
+        StyleEnums.SCREEN_UNSPECIFIED,
+        StyleEnums.SCREEN_COLORS,
+        StyleEnums.SCREEN_ICONS,
+        StyleEnums.SCREEN_LAYOUT,
+        StyleEnums.SCREEN_CLOCK,
+        StyleEnums.SCREEN_SHORTCUTS,
+    )
+    @Retention(AnnotationRetention.SOURCE)
+    annotation class CustomizationPickerScreen
 
     companion object {
         @WallpaperDestination

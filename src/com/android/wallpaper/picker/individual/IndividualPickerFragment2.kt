@@ -45,6 +45,7 @@ import androidx.cardview.widget.CardView
 import androidx.core.content.ContextCompat
 import androidx.core.widget.ContentLoadingProgressBar
 import androidx.fragment.app.DialogFragment
+import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
@@ -55,6 +56,7 @@ import com.android.wallpaper.model.Category
 import com.android.wallpaper.model.CategoryProvider
 import com.android.wallpaper.model.CategoryReceiver
 import com.android.wallpaper.model.LiveWallpaperInfo
+import com.android.wallpaper.model.Screen
 import com.android.wallpaper.model.WallpaperCategory
 import com.android.wallpaper.model.WallpaperInfo
 import com.android.wallpaper.model.WallpaperRotationInitializer
@@ -67,13 +69,12 @@ import com.android.wallpaper.picker.MyPhotosStarter.MyPhotosStarterProvider
 import com.android.wallpaper.picker.RotationStarter
 import com.android.wallpaper.picker.StartRotationDialogFragment
 import com.android.wallpaper.picker.StartRotationErrorDialogFragment
-import com.android.wallpaper.picker.category.ui.viewmodel.CategoriesViewModel
-import com.android.wallpaper.picker.category.ui.viewmodel.CategoriesViewModel.CategoryType
 import com.android.wallpaper.picker.category.wrapper.WallpaperCategoryWrapper
+import com.android.wallpaper.picker.customization.shared.model.CategoryType
+import com.android.wallpaper.picker.customization.ui.CustomizationPickerActivity2.Companion.CUSTOMIZATION_PICKER_FRAGMENT_TAG
+import com.android.wallpaper.picker.customization.ui.CustomizationPickerFragment2
 import com.android.wallpaper.picker.customization.ui.binder.ColorUpdateBinder
 import com.android.wallpaper.picker.customization.ui.viewmodel.ColorUpdateViewModel
-import com.android.wallpaper.util.ActivityUtils
-import com.android.wallpaper.util.LaunchUtils
 import com.android.wallpaper.util.SizeCalculator
 import com.android.wallpaper.widget.GridPaddingDecoration
 import com.android.wallpaper.widget.GridPaddingDecorationCreativeCategory
@@ -107,6 +108,7 @@ class IndividualPickerFragment2 :
 
         private const val ARG_CATEGORY_COLLECTION_ID = "category_collection_id"
         private const val ARG_CATEGORY_TYPE = "category_type"
+        private const val DESTINATION_SCREEN = "destination_screen"
 
         private const val UNUSED_REQUEST_CODE = 1
         private const val TAG_START_ROTATION_DIALOG = "start_rotation_dialog"
@@ -117,21 +119,15 @@ class IndividualPickerFragment2 :
         private val PROGRESS_DIALOG_NO_TITLE = null
         private var isCreativeCategory = false
 
-        fun newInstance(collectionId: String?): IndividualPickerFragment2 {
-            val args = Bundle()
-            args.putString(ARG_CATEGORY_COLLECTION_ID, collectionId)
-            val fragment = IndividualPickerFragment2()
-            fragment.arguments = args
-            return fragment
-        }
-
         fun newInstance(
             collectionId: String?,
-            categoryType: CategoriesViewModel.CategoryType,
+            categoryType: CategoryType? = null,
+            destinationScreen: Screen? = null,
         ): IndividualPickerFragment2 {
             val args = Bundle()
             args.putString(ARG_CATEGORY_COLLECTION_ID, collectionId)
-            args.putSerializable(ARG_CATEGORY_TYPE, categoryType)
+            categoryType?.let { args.putSerializable(ARG_CATEGORY_TYPE, it) }
+            destinationScreen?.let { args.putSerializable(DESTINATION_SCREEN, it) }
             val fragment = IndividualPickerFragment2()
             fragment.arguments = args
             return fragment
@@ -156,11 +152,9 @@ class IndividualPickerFragment2 :
     private var shouldReloadWallpapers = false
     private lateinit var categoryProvider: CategoryProvider
     private var appliedWallpaperIds: Set<String> = setOf()
-    private var mIsCreativeWallpaperEnabled = false
-    private var categoryRefactorFlag = false
     private var isNewPickerUi = false
 
-    private var refreshCreativeCategories: CategoriesViewModel.CategoryType? = null
+    private var refreshCreativeCategories: CategoryType? = null
 
     /**
      * Staged error dialog fragments that were unable to be shown when the activity didn't allow
@@ -174,11 +168,9 @@ class IndividualPickerFragment2 :
         super.onCreate(savedInstanceState)
         val injector = InjectorProvider.getInjector()
         val appContext = requireContext().applicationContext
-        mIsCreativeWallpaperEnabled = injector.getFlags().isAIWallpaperEnabled(appContext)
         wallpaperManager = WallpaperManager.getInstance(appContext)
         packageStatusNotifier = injector.getPackageStatusNotifier(appContext)
         wallpaperCategoryWrapper = injector.getWallpaperCategoryWrapper()
-        categoryRefactorFlag = injector.getFlags().isWallpaperCategoryRefactoringEnabled()
         isNewPickerUi = BaseFlags.get().isNewPickerUi()
 
         refreshCreativeCategories =
@@ -194,7 +186,7 @@ class IndividualPickerFragment2 :
             Glide.get(requireContext()).clearMemory()
         }
         categoryProvider = injector.getCategoryProvider(appContext)
-        if (categoryRefactorFlag && wallpaperCategoryWrapper != null) {
+        if (wallpaperCategoryWrapper != null) {
             lifecycleScope.launch {
                 getCategories(register = true, forceRefreshLiveWallpaperCategory = false)
             }
@@ -289,7 +281,7 @@ class IndividualPickerFragment2 :
                     WallpaperManager.getInstance(context).getWallpaperInfo(FLAG_LOCK)
 
                 // Handle first group (templates/items that allow to create a new wallpaper)
-                if (mIsCreativeWallpaperEnabled && firstEntry != null && supportsUserCreated) {
+                if (firstEntry != null && supportsUserCreated) {
                     val wallpapers = byGroup.getValue(firstEntry)
                     isCreativeCategory = true
 
@@ -383,11 +375,7 @@ class IndividualPickerFragment2 :
             appStatusListener =
                 PackageStatusNotifier.Listener { pkgName: String?, status: Int ->
                     if (category.isCategoryDownloadable) {
-                        if (categoryRefactorFlag) {
-                            refreshDownloadableCategories()
-                        } else {
-                            fetchCategories(forceRefresh = true, register = false)
-                        }
+                        refreshDownloadableCategories()
                     } else if (
                         (status != PackageStatusNotifier.PackageStatus.REMOVED ||
                             category.containsThirdParty(pkgName))
@@ -519,13 +507,11 @@ class IndividualPickerFragment2 :
         if (!this::imageGrid.isInitialized) {
             return
         }
-        // Skip if category hasn't loaded yet
-        if (category == null) {
+        if (category == null || activity == null || context == null) {
             return
         }
-        if (context == null) {
-            return
-        }
+        val viewAsHome: Boolean =
+            arguments?.getSerializable(DESTINATION_SCREEN, Screen::class.java) == Screen.HOME_SCREEN
         // Wallpaper count could change, so we may need to change the layout(2 or 3 columns layout)
         val gridLayoutManager = imageGrid.layoutManager as GridLayoutManager?
         val needUpdateLayout = gridLayoutManager?.spanCount != getNumColumns()
@@ -568,7 +554,7 @@ class IndividualPickerFragment2 :
             } else {
                 SizeCalculator.getIndividualTileSize(requireActivity())
             }
-        setUpImageGrid(tileSizePx, checkNotNull(category))
+        setUpImageGrid(tileSizePx, checkNotNull(category), viewAsHome)
         imageGrid.setAccessibilityDelegateCompat(
             WallpaperPickerRecyclerViewAccessibilityDelegate(
                 imageGrid,
@@ -579,7 +565,7 @@ class IndividualPickerFragment2 :
     }
 
     private fun isFewerColumnLayout(): Boolean =
-        (!mIsCreativeWallpaperEnabled || category?.supportsUserCreatedWallpapers() == false) &&
+        category?.supportsUserCreatedWallpapers() == false &&
             items.count { it is PickerItem.WallpaperItem } <= MAX_CAPACITY_IN_FEWER_COLUMN_LAYOUT
 
     private fun getGridItemPaddingHorizontal(): Int {
@@ -612,11 +598,12 @@ class IndividualPickerFragment2 :
      * Create the adapter and assign it to mImageGrid. Both mImageGrid and mCategory are guaranteed
      * to not be null when this method is called.
      */
-    private fun setUpImageGrid(tileSizePx: Point, category: Category) {
+    private fun setUpImageGrid(tileSizePx: Point, category: Category, viewAsHome: Boolean) {
         adapter =
             IndividualAdapter(
                 items,
                 category,
+                viewAsHome,
                 requireActivity(),
                 tileSizePx,
                 isRotationEnabled(),
@@ -745,11 +732,28 @@ class IndividualPickerFragment2 :
                             } catch (e: Resources.NotFoundException) {
                                 Log.e(TAG, "Could not show toast $e")
                             }
-                            activity.setResult(Activity.RESULT_OK)
-                            activity.finish()
-                            if (!ActivityUtils.isSUWMode(appContext)) {
-                                // Go back to launcher home.
-                                LaunchUtils.launchHome(appContext)
+
+                            // Navigate back to the root fragment (CustomizationPickerFragment2)
+                            val fragmentManager: FragmentManager = parentFragmentManager
+                            // Pop all the fragments until the root fragment
+                            fragmentManager.popBackStack(
+                                null,
+                                FragmentManager.POP_BACK_STACK_INCLUSIVE,
+                            )
+                            // Ensure the root fragment is CUSTOMIZATION_PICKER_FRAGMENT_TAG
+                            if (
+                                fragmentManager.findFragmentByTag(
+                                    CUSTOMIZATION_PICKER_FRAGMENT_TAG
+                                ) == null
+                            ) {
+                                fragmentManager
+                                    .beginTransaction()
+                                    .replace(
+                                        R.id.fragment_container, // containerViewId
+                                        CustomizationPickerFragment2(), // fragment
+                                        CUSTOMIZATION_PICKER_FRAGMENT_TAG, // tag
+                                    )
+                                    .commit()
                             }
                         }
                     } else { // Failed to start rotation.
@@ -863,6 +867,7 @@ class IndividualPickerFragment2 :
     class IndividualAdapter(
         private val items: List<PickerItem>,
         private val category: Category,
+        private val viewAsHome: Boolean,
         private val activity: Activity,
         private val tileSizePx: Point,
         private val isRotationEnabled: Boolean,
@@ -886,9 +891,9 @@ class IndividualPickerFragment2 :
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
             return when (viewType) {
-                ITEM_VIEW_TYPE_INDIVIDUAL_WALLPAPER -> createIndividualHolder(parent)
+                ITEM_VIEW_TYPE_INDIVIDUAL_WALLPAPER -> createIndividualHolder(parent, viewAsHome)
                 ITEM_VIEW_TYPE_MY_PHOTOS -> createMyPhotosHolder(parent)
-                ITEM_VIEW_TYPE_CREATIVE -> creativeCategoryHolder(parent)
+                ITEM_VIEW_TYPE_CREATIVE -> creativeCategoryHolder(parent, viewAsHome)
                 ITEM_VIEW_TYPE_HEADER -> createTitleHolder(parent, /* removePaddingTop= */ false)
                 ITEM_VIEW_TYPE_HEADER_TOP -> createTitleHolder(parent, /* removePaddingTop= */ true)
                 else -> {
@@ -939,20 +944,32 @@ class IndividualPickerFragment2 :
             }
         }
 
-        private fun createIndividualHolder(parent: ViewGroup): RecyclerView.ViewHolder {
+        private fun createIndividualHolder(
+            parent: ViewGroup,
+            viewAsHome: Boolean,
+        ): RecyclerView.ViewHolder {
             val layoutInflater = LayoutInflater.from(activity)
             val view: View = layoutInflater.inflate(R.layout.grid_item_image, parent, false)
-            return PreviewIndividualHolder(activity, tileSizePx.y, view, refreshCreativeCategories)
+            return PreviewIndividualHolder(
+                activity,
+                tileSizePx.y,
+                view,
+                refreshCreativeCategories,
+                viewAsHome,
+            )
         }
 
-        private fun creativeCategoryHolder(parent: ViewGroup): RecyclerView.ViewHolder {
+        private fun creativeCategoryHolder(
+            parent: ViewGroup,
+            viewAsHome: Boolean,
+        ): RecyclerView.ViewHolder {
             val layoutInflater = LayoutInflater.from(activity)
             val view: View =
                 layoutInflater.inflate(R.layout.creative_category_holder, parent, false)
             if (isCreativeCategory) {
                 view.setPadding(edgePadding, topPadding, edgePadding, bottomPadding)
             }
-            return CreativeCategoryHolder(activity, view)
+            return CreativeCategoryHolder(activity, view, viewAsHome)
         }
 
         private fun createMyPhotosHolder(parent: ViewGroup): RecyclerView.ViewHolder {

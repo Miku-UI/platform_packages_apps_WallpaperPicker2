@@ -19,27 +19,35 @@ package com.android.wallpaper.picker.category.ui.view
 import android.Manifest
 import android.app.Activity
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ResolveInfo
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.stats.style.StyleEnums
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.fragment.app.commit
-import androidx.fragment.app.replace
 import androidx.recyclerview.widget.RecyclerView
 import com.android.wallpaper.R
 import com.android.wallpaper.config.BaseFlags
 import com.android.wallpaper.model.ImageWallpaperInfo
+import com.android.wallpaper.model.Screen
 import com.android.wallpaper.module.MultiPanesChecker
+import com.android.wallpaper.module.logging.UserEventLogger
 import com.android.wallpaper.picker.AppbarFragment
 import com.android.wallpaper.picker.MyPhotosStarter
 import com.android.wallpaper.picker.WallpaperPickerDelegate.VIEW_ONLY_PREVIEW_WALLPAPER_REQUEST_CODE
@@ -48,11 +56,14 @@ import com.android.wallpaper.picker.category.ui.binder.CategoriesBinder
 import com.android.wallpaper.picker.category.ui.view.providers.IndividualPickerFactory
 import com.android.wallpaper.picker.category.ui.viewmodel.CategoriesViewModel
 import com.android.wallpaper.picker.common.preview.data.repository.PersistentWallpaperModelRepository
+import com.android.wallpaper.picker.customization.shared.model.CategoryType
 import com.android.wallpaper.picker.customization.ui.binder.ColorUpdateBinder
 import com.android.wallpaper.picker.customization.ui.viewmodel.ColorUpdateViewModel
 import com.android.wallpaper.picker.data.WallpaperModel
-import com.android.wallpaper.picker.preview.ui.WallpaperPreviewActivity
+import com.android.wallpaper.picker.wallpapers.data.repository.CategoryWallpapersRepository
+import com.android.wallpaper.picker.wallpapers.ui.view.CategoryWallpapersFragment
 import com.android.wallpaper.util.ActivityUtils
+import com.android.wallpaper.util.CuratedPhotosTimeUtil
 import com.android.wallpaper.util.SizeCalculator
 import com.android.wallpaper.util.converter.WallpaperModelFactory
 import com.google.android.material.appbar.AppBarLayout
@@ -71,7 +82,11 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
     @Inject lateinit var wallpaperModelFactory: WallpaperModelFactory
     @Inject lateinit var colorUpdateViewModel: ColorUpdateViewModel
     @Inject lateinit var bannerProvider: BannerProvider
+    @Inject lateinit var curatedPhotosTimeUtil: CuratedPhotosTimeUtil
+    @Inject lateinit var userEventLogger: UserEventLogger
+    @Inject lateinit var categoryWallpapersRepository: CategoryWallpapersRepository
     private lateinit var photoPickerLauncher: ActivityResultLauncher<Intent>
+    private lateinit var extendedWallpaperEffectsLauncher: ActivityResultLauncher<Intent>
 
     // TODO: this may need to be scoped to fragment if the architecture changes
     private val categoriesViewModel by activityViewModels<CategoriesViewModel>()
@@ -90,8 +105,39 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
                 val context = context ?: return@registerForActivityResult
                 val wallpaperModel =
                     wallpaperModelFactory.getWallpaperModel(context, imageWallpaperInfo)
-                startWallpaperPreviewActivity(wallpaperModel, false)
+                startPreviewActivity(
+                    wallpaperModel = wallpaperModel,
+                    isCreativeCategories = false,
+                    shouldNavigateToExtendedWallpaperEffects = false,
+                    setWallpaperEntryPoint = StyleEnums.SET_WALLPAPER_ENTRY_POINT_WALLPAPER_PREVIEW,
+                )
             }
+
+        extendedWallpaperEffectsLauncher =
+            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                if (
+                    result.resultCode != Activity.RESULT_OK ||
+                        result.data?.data == null ||
+                        context == null
+                ) {
+                    return@registerForActivityResult
+                }
+
+                val wallpaperModel =
+                    extractWallpaperModelFromResult(result.data!!, requireContext())
+                startPreviewActivity(
+                    wallpaperModel = wallpaperModel,
+                    isCreativeCategories = false,
+                    shouldNavigateToExtendedWallpaperEffects = true,
+                    setWallpaperEntryPoint = StyleEnums.SET_WALLPAPER_ENTRY_POINT_WALLPAPER_PREVIEW,
+                )
+            }
+    }
+
+    private fun extractWallpaperModelFromResult(result: Intent, context: Context): WallpaperModel {
+        val imageUri = result.data
+        val imageWallpaperInfo = ImageWallpaperInfo(imageUri)
+        return wallpaperModelFactory.getWallpaperModel(context, imageWallpaperInfo)
     }
 
     override fun onCreateView(
@@ -99,13 +145,27 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
         container: ViewGroup?,
         savedInstanceState: Bundle?,
     ): View {
-        val view =
-            inflater.inflate(R.layout.categories_fragment, container, /* attachToRoot= */ false)
+        val isNewPickerUi = BaseFlags.get().isNewPickerUi()
 
+        val view =
+            if (isNewPickerUi) {
+                // Inflate categories fragment with new toolbar.
+                inflater.inflate(
+                    R.layout.categories_fragment2,
+                    container,
+                    /* attachToRoot= */ false,
+                )
+            } else {
+                inflater.inflate(R.layout.categories_fragment, container, /* attachToRoot= */ false)
+            }
         setUpToolbar(view)
         setTitle(getText(R.string.wallpaper_title))
 
-        val isNewPickerUi = BaseFlags.get().isNewPickerUi()
+        // Explicitly hiding the background for now
+        // we'll turn it back on again once we have a better contrast image
+        val categoriesHeaderImage: ImageView? = view.findViewById(R.id.categories_header_image)
+        categoriesHeaderImage?.let { it.isVisible = false }
+
         if (isNewPickerUi) {
             ColorUpdateBinder.bind(
                 setColor = { _ ->
@@ -113,9 +173,9 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
                     // AppBarLayout, therefore remove and re-add view to update colors based on new
                     // context
                     val contentParent = view.requireViewById<ViewGroup>(R.id.content_parent)
-                    val appBarLayout = view.requireViewById<AppBarLayout>(R.id.app_bar)
+                    val appBarLayout = contentParent.requireViewById<AppBarLayout>(R.id.app_bar)
                     contentParent.removeView(appBarLayout)
-                    layoutInflater.inflate(R.layout.section_header_content, contentParent, true)
+                    layoutInflater.inflate(R.layout.section_header_content2, contentParent, true)
                     setUpToolbar(view)
                     setTitle(getText(R.string.wallpaper_title))
                     contentParent.requestApplyInsets()
@@ -132,42 +192,33 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
             windowWidth = SizeCalculator.getActivityWindowWidthPx(this.activity),
             colorUpdateViewModel = colorUpdateViewModel,
             shouldAnimateColor = { false },
+            curatedPhotosTimeUtil = curatedPhotosTimeUtil,
+            userEventLogger = userEventLogger,
             bannerProvider = bannerProvider,
             lifecycleOwner = viewLifecycleOwner,
         ) { navigationEvent, callback ->
             when (navigationEvent) {
                 is CategoriesViewModel.NavigationEvent.NavigateToWallpaperCollection -> {
-                    switchFragment(
-                        individualPickerFactory.getIndividualPickerInstance(
-                            navigationEvent.categoryId,
-                            navigationEvent.categoryType,
+                    if (BaseFlags.get().isWallpapersFragmentEnabled()) {
+                        categoryWallpapersRepository.setSelectedCategory(
+                            navigationEvent.categoryModel
                         )
-                    )
-                }
-                is CategoriesViewModel.NavigationEvent.NavigateToPhotosPicker -> {
-                    if (BaseFlags.get().isPhotoPickerEnabled()) {
-                        parentFragmentManager.commit {
-                            replace<PhotoPickerFragment>(R.id.fragment_container)
-                            addToBackStack(null)
-                        }
+                        switchFragment(CategoryWallpapersFragment())
                     } else {
-                        // make call to permission handler to grab photos and pass callback
-                        myPhotosStarterImpl.requestCustomPhotoPicker(
-                            object : MyPhotosStarter.PermissionChangedListener {
-                                override fun onPermissionsGranted() {
-                                    callback?.invoke()
-                                }
+                        val screen: Screen? =
+                            arguments?.getSerializable(DESTINATION_SCREEN, Screen::class.java)
 
-                                override fun onPermissionsDenied(dontAskAgain: Boolean) {
-                                    if (dontAskAgain) {
-                                        showPermissionSnackbar()
-                                    }
-                                }
-                            },
-                            requireActivity(),
-                            photoPickerLauncher,
+                        switchFragment(
+                            individualPickerFactory.getIndividualPickerInstance(
+                                navigationEvent.categoryModel.commonCategoryData.collectionId,
+                                navigationEvent.categoryType,
+                                screen,
+                            )
                         )
                     }
+                }
+                is CategoriesViewModel.NavigationEvent.NavigateToPhotosPicker -> {
+                    startPhotoPicker(shouldNavigateToExtendedWallpaperEffects = false, callback)
                 }
                 is CategoriesViewModel.NavigationEvent.NavigateToThirdParty -> {
                     startThirdPartyCategoryActivity(
@@ -177,38 +228,98 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
                     )
                 }
                 is CategoriesViewModel.NavigationEvent.NavigateToPreviewScreen -> {
-                    startWallpaperPreviewActivity(
-                        navigationEvent.wallpaperModel,
-                        navigationEvent.categoryType ==
-                            CategoriesViewModel.CategoryType.CreativeCategories,
+                    startPreviewActivity(
+                        wallpaperModel = navigationEvent.wallpaperModel,
+                        isCreativeCategories =
+                            navigationEvent.categoryType == CategoryType.CreativeCategories,
+                        shouldNavigateToExtendedWallpaperEffects = false,
+                        setWallpaperEntryPoint = navigationEvent.entryPoint,
                     )
+                }
+                is CategoriesViewModel.NavigationEvent.NavigateToExtendedWallpaperEffects -> {
+                    startPhotoPicker(shouldNavigateToExtendedWallpaperEffects = true, callback)
                 }
             }
         }
         return view
     }
 
-    private fun startWallpaperPreviewActivity(
+    private fun startPreviewActivity(
         wallpaperModel: WallpaperModel,
         isCreativeCategories: Boolean,
+        shouldNavigateToExtendedWallpaperEffects: Boolean,
+        @UserEventLogger.SetWallpaperEntryPoint setWallpaperEntryPoint: Int,
     ) {
-        val appContext = requireContext()
-        val activity = requireActivity()
+        val screen = arguments?.getSerializable(DESTINATION_SCREEN, Screen::class.java)
+        val isDestinationHome = screen?.let { it == Screen.HOME_SCREEN } ?: true
         persistentWallpaperModelRepository.setWallpaperModel(wallpaperModel)
-        val isMultiPanel = multiPanesChecker.isMultiPanesEnabled(appContext)
-        val previewIntent =
-            WallpaperPreviewActivity.newIntent(
-                context = appContext,
-                isAssetIdPresent = true,
-                isViewAsHome = true,
-                isNewTask = isMultiPanel,
-                shouldCategoryRefresh = isCreativeCategories,
-            )
-        ActivityUtils.startActivityForResultSafely(
-            activity,
-            previewIntent,
-            VIEW_ONLY_PREVIEW_WALLPAPER_REQUEST_CODE, // TODO: provide correct request code
+        // TODO (b/432260350): Provide correct request code
+        ActivityUtils.startWallpaperPreviewActivity(
+            activity = requireActivity(),
+            isCreativeCategories = isCreativeCategories,
+            shouldNavigateToExtendedWallpaperEffects = shouldNavigateToExtendedWallpaperEffects,
+            isViewAsHome = isDestinationHome,
+            requestCode = VIEW_ONLY_PREVIEW_WALLPAPER_REQUEST_CODE,
+            isMultiPanesEnabled = multiPanesChecker.isMultiPanesEnabled(requireContext()),
+            setWallpaperEntryPoint = setWallpaperEntryPoint,
         )
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        val categoryGrid: RecyclerView = view.findViewById(R.id.category_grid)
+
+        activity?.let { WindowCompat.setDecorFitsSystemWindows(it.window, false) }
+
+        // Apply the window insets as padding to the RecyclerView
+        // This ensures the RecyclerView content can scroll above the navigation bar
+        ViewCompat.setOnApplyWindowInsetsListener(categoryGrid) { v, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+
+            // Get current padding, and add the bottom system bar inset to it
+            val bottomPadding = systemBars.bottom
+
+            // Apply padding to the RecyclerView
+            v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, bottomPadding)
+            insets
+        }
+    }
+
+    private fun startPhotoPicker(
+        shouldNavigateToExtendedWallpaperEffects: Boolean,
+        callback: (() -> Unit)?,
+    ) {
+        if (BaseFlags.get().isPhotoPickerEnabled()) {
+            parentFragmentManager.commit {
+                replace(
+                    R.id.fragment_container,
+                    PhotoPickerFragment.newInstance(
+                        shouldNavigateToExtendedWallpaperEffects =
+                            shouldNavigateToExtendedWallpaperEffects
+                    ),
+                )
+                addToBackStack(null)
+            }
+        } else {
+            // make call to permission handler to grab photos and pass callback
+            myPhotosStarterImpl.requestCustomPhotoPicker(
+                object : MyPhotosStarter.PermissionChangedListener {
+                    override fun onPermissionsGranted() {
+                        callback?.invoke()
+                    }
+
+                    override fun onPermissionsDenied(dontAskAgain: Boolean) {
+                        if (dontAskAgain) {
+                            showPermissionSnackbar()
+                        }
+                    }
+                },
+                requireActivity(),
+                if (shouldNavigateToExtendedWallpaperEffects) extendedWallpaperEffectsLauncher
+                else photoPickerLauncher,
+            )
+        }
     }
 
     private fun showPermissionSnackbar() {
@@ -249,6 +360,7 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
         val itemComponentName =
             ComponentName(resolveInfo.activityInfo.packageName, resolveInfo.activityInfo.name)
         val launchIntent = Intent(Intent.ACTION_SET_WALLPAPER)
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         launchIntent.component = itemComponentName
         ActivityUtils.startActivityForResultSafely(srcActivity, launchIntent, requestCode)
     }
@@ -266,5 +378,14 @@ class CategoriesFragment : Hilt_CategoriesFragment() {
         const val SHOW_CATEGORY_REQUEST_CODE = 0
         const val SETTINGS_APP_INFO_REQUEST_CODE = 1
         const val READ_IMAGE_PERMISSION: String = Manifest.permission.READ_MEDIA_IMAGES
+
+        private const val DESTINATION_SCREEN = "destination_screen"
+
+        fun newInstance(destinationScreen: Screen): CategoriesFragment {
+            return CategoriesFragment().apply {
+                arguments =
+                    Bundle().apply { putSerializable(DESTINATION_SCREEN, destinationScreen) }
+            }
+        }
     }
 }

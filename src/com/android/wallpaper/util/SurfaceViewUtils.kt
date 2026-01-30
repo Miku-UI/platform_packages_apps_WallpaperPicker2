@@ -25,7 +25,7 @@ import android.view.ViewGroup
 
 /** Util class to generate surface view requests and parse responses */
 object SurfaceViewUtils {
-    private const val KEY_HOST_TOKEN = "host_token"
+    const val KEY_HOST_TOKEN = "host_token"
     const val KEY_VIEW_WIDTH = "width"
     const val KEY_VIEW_HEIGHT = "height"
     private const val KEY_SURFACE_PACKAGE = "surface_package"
@@ -56,12 +56,17 @@ object SurfaceViewUtils {
     }
 
     /** Removes the view from its parent and attaches to the surface control */
-    fun SurfaceView.attachView(view: View, newWidth: Int = width, newHeight: Int = height) {
+    fun SurfaceView.attachView(
+        view: View,
+        newWidth: Int = width,
+        newHeight: Int = height,
+    ): SurfaceControlViewHost {
         // Detach view from its parent, if the view has one
         (view.parent as ViewGroup?)?.removeView(view)
         val host = SurfaceControlViewHost(context, display, hostToken)
         host.setView(view, newWidth, newHeight)
         setChildSurfacePackage(checkNotNull(host.surfacePackage))
+        return host
     }
 
     interface SurfaceCallback : SurfaceHolder.Callback {
@@ -70,5 +75,7 @@ object SurfaceViewUtils {
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {}
+
+        fun releaseSurfaceControlViewHost() {}
     }
 }

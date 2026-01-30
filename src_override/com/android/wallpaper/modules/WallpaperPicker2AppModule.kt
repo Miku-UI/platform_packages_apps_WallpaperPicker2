@@ -17,12 +17,16 @@ package com.android.wallpaper.modules
 
 import com.android.wallpaper.effects.DefaultEffectsController
 import com.android.wallpaper.effects.EffectsController
+import com.android.wallpaper.module.DefaultExtendedEffectsHelper
 import com.android.wallpaper.module.DefaultPartnerProvider
 import com.android.wallpaper.module.DefaultRecentWallpaperManager
+import com.android.wallpaper.module.DefaultThirdPartyLiveWallpaperModelFactory
 import com.android.wallpaper.module.DefaultWallpaperPreferences
+import com.android.wallpaper.module.ExtendedEffectsHelper
 import com.android.wallpaper.module.Injector
 import com.android.wallpaper.module.PartnerProvider
 import com.android.wallpaper.module.RecentWallpaperManager
+import com.android.wallpaper.module.ThirdPartyLiveWallpaperModelFactory
 import com.android.wallpaper.module.WallpaperPicker2Injector
 import com.android.wallpaper.module.WallpaperPreferences
 import com.android.wallpaper.module.logging.NoOpUserEventLogger
@@ -49,8 +53,14 @@ import com.android.wallpaper.picker.common.preview.ui.binder.DefaultWorkspaceCal
 import com.android.wallpaper.picker.common.preview.ui.binder.WorkspaceCallbackBinder
 import com.android.wallpaper.picker.customization.ui.binder.CustomizationOptionsBinder
 import com.android.wallpaper.picker.customization.ui.binder.DefaultCustomizationOptionsBinder
+import com.android.wallpaper.picker.customization.ui.binder.DefaultPackThemeSuggestedEntryBinder
 import com.android.wallpaper.picker.customization.ui.binder.DefaultToolbarBinder
+import com.android.wallpaper.picker.customization.ui.binder.PackThemeSuggestedEntryBinder
 import com.android.wallpaper.picker.customization.ui.binder.ToolbarBinder
+import com.android.wallpaper.picker.customization.ui.util.CustomizationOptionUtil
+import com.android.wallpaper.picker.customization.ui.util.DefaultCustomizationOptionUtil
+import com.android.wallpaper.picker.preview.ui.binder.ApplyWallpaperOptionsProvider
+import com.android.wallpaper.picker.preview.ui.binder.DefaultApplyWallpaperOptionsProvider
 import com.android.wallpaper.picker.preview.ui.util.DefaultImageEffectDialogUtil
 import com.android.wallpaper.picker.preview.ui.util.ImageEffectDialogUtil
 import com.android.wallpaper.util.converter.DefaultPhotosErrorConvertor
@@ -90,7 +100,19 @@ abstract class WallpaperPicker2AppModule {
 
     @Binds
     @Singleton
+    abstract fun bindCustomizationOptionUtil(
+        impl: DefaultCustomizationOptionUtil
+    ): CustomizationOptionUtil
+
+    @Binds
+    @Singleton
     abstract fun bindEffectsController(impl: DefaultEffectsController): EffectsController
+
+    @Binds
+    @Singleton
+    abstract fun bindExtendedEffectsHelper(
+        impl: DefaultExtendedEffectsHelper
+    ): ExtendedEffectsHelper
 
     @Binds
     @Singleton
@@ -121,6 +143,12 @@ abstract class WallpaperPicker2AppModule {
     abstract fun bindLoadingStatusInteractor(
         impl: DefaultCategoriesLoadingStatusInteractor
     ): CategoriesLoadingStatusInteractor
+
+    @Binds
+    @Singleton
+    abstract fun bindPackThemeSuggestedEntryBinder(
+        impl: DefaultPackThemeSuggestedEntryBinder
+    ): PackThemeSuggestedEntryBinder
 
     @Binds
     @Singleton
@@ -165,6 +193,18 @@ abstract class WallpaperPicker2AppModule {
     abstract fun bindRecentWallpaperManager(
         impl: DefaultRecentWallpaperManager
     ): RecentWallpaperManager
+
+    @Binds
+    @Singleton
+    abstract fun bindApplyWallpaperOptionsProvider(
+        impl: DefaultApplyWallpaperOptionsProvider
+    ): ApplyWallpaperOptionsProvider
+
+    @Binds
+    @Singleton
+    abstract fun bindThirdPartyLiveWallpaperModelFactory(
+        impl: DefaultThirdPartyLiveWallpaperModelFactory
+    ): ThirdPartyLiveWallpaperModelFactory
 
     companion object {
 

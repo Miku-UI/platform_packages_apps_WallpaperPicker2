@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.graphics.Matrix
 import android.graphics.Point
@@ -22,22 +23,31 @@ import android.view.SurfaceControl
 import android.view.SurfaceView
 import android.view.View
 import com.android.app.tracing.TraceUtils.traceAsync
-import com.android.wallpaper.R
+import com.android.wallpaper.effects.EffectsController
+import com.android.wallpaper.model.Screen
 import com.android.wallpaper.model.wallpaper.DeviceDisplayType
+import com.android.wallpaper.picker.broadcast.BroadcastDispatcher
 import com.android.wallpaper.picker.customization.shared.model.WallpaperDestination
 import com.android.wallpaper.picker.customization.shared.model.WallpaperDestination.Companion.toSetWallpaperFlags
 import com.android.wallpaper.picker.data.WallpaperModel.LiveWallpaperModel
+import com.android.wallpaper.picker.di.modules.BackgroundDispatcher
+import com.android.wallpaper.util.ExtendedWallpaperEffectsUtils.isExtendedEffectWallpaper
 import com.android.wallpaper.util.WallpaperConnection.WhichPreview
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.android.scopes.ActivityRetainedScoped
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -45,7 +55,13 @@ import kotlinx.coroutines.sync.withLock
 @ActivityRetainedScoped
 class WallpaperConnectionUtils
 @Inject
-constructor(@ApplicationContext private val context: Context) {
+constructor(
+    private val effectsController: EffectsController,
+    @ApplicationContext private val context: Context,
+    private val broadcastDispatcher: BroadcastDispatcher,
+    @BackgroundDispatcher private val bgDispatcher: CoroutineDispatcher,
+    @BackgroundDispatcher private val bgScope: CoroutineScope,
+) {
 
     // The engineMap and the surfaceControlMap are used for disconnecting wallpaper services.
     private val wallpaperConnectionMap = ConcurrentHashMap<String, Deferred<WallpaperConnection>>()
@@ -57,10 +73,31 @@ constructor(@ApplicationContext private val context: Context) {
     // Track the currently used creative wallpaper config preview URI to avoid unnecessary multiple
     // update queries for the same preview.
     private val creativeWallpaperConfigPreviewUriMap = mutableMapOf<String, Uri>()
+    private val isPreviewEnginesConnected = CompletableDeferred<Boolean>()
 
     private val mutex = Mutex()
 
-    /** Only call this function when the surface view is attached. */
+    private var disconnectOnWallpaperChange = false
+
+    // Set true to enable debug logging (engine create/destroy, etc.)
+    private val debug = false
+
+    init {
+        // We need to clear existing previews when a wallpaper is set since it's possible they will
+        // be stale. See b/414490885.
+        val wallpaperChanged =
+            broadcastDispatcher.broadcastFlow(IntentFilter(Intent.ACTION_WALLPAPER_CHANGED))
+        bgScope.launch {
+            wallpaperChanged.collect { if (disconnectOnWallpaperChange) disconnectAll() }
+        }
+    }
+
+    /**
+     * Only call this function when the surface view is attached.
+     *
+     * @param totalEngineNum numbers of engines that should be considered connected when all of them
+     *   are connected via [isPreviewEnginesConnected].
+     */
     suspend fun connect(
         context: Context,
         wallpaperModel: LiveWallpaperModel,
@@ -69,8 +106,13 @@ constructor(@ApplicationContext private val context: Context) {
         surfaceView: SurfaceView,
         engineRenderingConfig: EngineRenderingConfig,
         isFirstBindingDeferred: CompletableDeferred<Boolean>,
+        disconnectOnWallpaperChange: Boolean,
+        totalEngineNum: Int = 1,
         listener: WallpaperEngineConnection.WallpaperEngineConnectionListener? = null,
+        signalConfigChange: Boolean = false,
+        onPreviewReady: (() -> Unit)? = null,
     ) {
+        this.disconnectOnWallpaperChange = disconnectOnWallpaperChange
         val wallpaperInfo = wallpaperModel.liveWallpaperData.systemWallpaperInfo
         val engineDisplaySize = engineRenderingConfig.getEngineDisplaySize()
         val engineKey =
@@ -80,6 +122,9 @@ constructor(@ApplicationContext private val context: Context) {
                 wallpaperModel.liveWallpaperData.systemWallpaperInfo.component,
                 destinationFlag,
             )
+        val shortKey = engineKey.split(":").let { it.slice(2 until it.size) }.joinToString(":")
+
+        if (debug) Log.d(TAG, "${toHex(this)}: requesting connection with key $engineKey")
 
         traceAsync(TAG, "connect") {
             // Update the creative wallpaper uri before starting the service.
@@ -105,11 +150,15 @@ constructor(@ApplicationContext private val context: Context) {
                 }
             }
 
+            val isConfigChange = signalConfigChange && !isFirstBindingDeferred.await()
+
+            if (debug) Log.d(TAG, "isConfigChange: $isConfigChange")
+
             if (!wallpaperConnectionMap.containsKey(engineKey)) {
                 mutex.withLock {
                     if (!wallpaperConnectionMap.containsKey(engineKey)) {
-                        wallpaperConnectionMap[engineKey] = coroutineScope {
-                            async {
+                        coroutineScope {
+                            wallpaperConnectionMap[engineKey] = async {
                                 initEngine(
                                     context,
                                     wallpaperModel.getWallpaperServiceIntent(),
@@ -119,7 +168,14 @@ constructor(@ApplicationContext private val context: Context) {
                                     surfaceView,
                                     listener,
                                     wallpaperModel.liveWallpaperData.description,
+                                    isConfigChange,
+                                    this@WallpaperConnectionUtils,
+                                    shortKey,
                                 )
+                            }
+
+                            if (wallpaperConnectionMap.size == totalEngineNum) {
+                                isPreviewEnginesConnected.complete(true)
                             }
                         }
                     }
@@ -134,21 +190,24 @@ constructor(@ApplicationContext private val context: Context) {
             latestConnectionMap[serviceKey] =
                 wallpaperConnectionMap[engineKey] as Deferred<WallpaperConnection>
 
-            wallpaperConnectionMap[engineKey]?.await()?.let { (engineConnection, _, _, _) ->
-                engineConnection.get()?.engine?.let {
+            wallpaperConnectionMap[engineKey]?.await()?.let { connection ->
+                if (debug) Log.d(TAG, "${toHex(this)}: MIR: $connection")
+                connection.engineConnection.get()?.engine?.let {
                     mirrorAndReparent(
                         engineKey,
                         it,
                         surfaceView,
                         engineRenderingConfig.getEngineDisplaySize(),
                         engineRenderingConfig.enforceSingleEngine,
+                        onPreviewReady,
                     )
                 }
             }
         }
     }
 
-    suspend fun disconnectAll(context: Context) {
+    suspend fun disconnectAll() {
+        if (debug) Log.d(TAG, "${toHex(this)}: disconnectAll()")
         surfaceControlMap.keys.map { key ->
             mutex.withLock {
                 surfaceControlMap[key]?.let { surfaceControls ->
@@ -158,7 +217,63 @@ constructor(@ApplicationContext private val context: Context) {
             }
         }
         surfaceControlMap.clear()
-        disconnectAllServices(context)
+        disconnectAllServices()
+    }
+
+    suspend fun disconnect(packageName: String) {
+        mutex.withLock {
+            if (debug) Log.d(TAG, "${toHex(this)}: disconnect(packageName)")
+            surfaceControlMap.apply {
+                filterKeys { key -> key.startsWith(packageName) }
+                    .keys
+                    .forEach { engineKey ->
+                        remove(engineKey)?.let { surfaceControls ->
+                            surfaceControls.forEach { it.release() }
+                            surfaceControls.clear()
+                        }
+                        wallpaperConnectionMap.remove(engineKey)?.await()?.disconnect(context)
+                    }
+            }
+        }
+    }
+
+    suspend fun disconnect(connection: WallpaperConnection) {
+        mutex.withLock {
+            if (debug) Log.d(TAG, "${toHex(this)}: disconnect(connection)")
+            wallpaperConnectionMap
+                .filterValues { engine ->
+                    engine.await().engineConnection.get().let {
+                        it != null && it == connection.engineConnection.get()
+                    }
+                }
+                .keys
+                .forEach { key ->
+                    wallpaperConnectionMap.remove(key)?.await()?.disconnect(context)
+                    surfaceControlMap.remove(key)?.let { surfaceControls ->
+                        surfaceControls.forEach { it.release() }
+                        surfaceControls.clear()
+                    }
+                }
+        }
+    }
+
+    suspend fun setEngineVisibility(packageName: String, screen: Screen, isVisible: Boolean) {
+        if (isPreviewEnginesConnected.await()) {
+            mutex.withLock {
+                wallpaperConnectionMap
+                    .filterKeys { key ->
+                        key.startsWith(packageName) && key.contains(":${screen.toFlag()}:")
+                    }
+                    .values
+                    .forEach {
+                        try {
+                            it.await().engineConnection.get()?.engine?.setVisibility(isVisible)
+                        } catch (e: RemoteException) {
+                            Log.w(TAG, "Error setting engine visibility", e)
+                        }
+                    }
+            }
+        }
     }
 
     /**
@@ -169,7 +284,8 @@ constructor(@ApplicationContext private val context: Context) {
      * clear the surface controls yet, because we will need them to render the live wallpapers again
      * when switching from static to live wallpapers again.
      */
-    suspend fun disconnectAllServices(context: Context) {
+    suspend fun disconnectAllServices() {
+        if (debug) Log.d(TAG, "${toHex(this)}: disconnectAllServices()")
         wallpaperConnectionMap.keys.map { key ->
             mutex.withLock { wallpaperConnectionMap.remove(key)?.await()?.disconnect(context) }
         }
@@ -239,9 +355,15 @@ constructor(@ApplicationContext private val context: Context) {
                 wallpaperModel.liveWallpaperData.systemWallpaperInfo.component,
             )
         latestConnectionMap[serviceKey]?.await()?.engineConnection?.get()?.engine?.let {
-            return it.javaClass
-                .getMethod("onApplyWallpaper", Int::class.javaPrimitiveType)
-                .invoke(it, destination.toSetWallpaperFlags()) as WallpaperDescription?
+            try {
+                return it.javaClass
+                    .getMethod("onApplyWallpaper", Int::class.javaPrimitiveType)
+                    .invoke(it, destination.toSetWallpaperFlags()) as WallpaperDescription?
+            } catch (e: RemoteException) {
+                // We catch this explicitly because it means that the method is defined, but the
+                // bound object is dead.
+                Log.w(TAG, "Error calling onApplyWallpaper", e)
+            }
         }
         return null
     }
@@ -261,26 +383,65 @@ constructor(@ApplicationContext private val context: Context) {
         surfaceView: SurfaceView,
         listener: WallpaperEngineConnection.WallpaperEngineConnectionListener?,
         description: WallpaperDescription,
+        isConfigChange: Boolean,
+        owner: WallpaperConnectionUtils? = null,
+        shortKey: String = "",
     ): WallpaperConnection {
         // Bind service and get service connection and wallpaper service
         val (serviceConnection, wallpaperService) = bindWallpaperService(context, wallpaperIntent)
         val engineConnection = WallpaperEngineConnection(displayMetrics, whichPreview)
         listener?.let { engineConnection.setListener(it) }
+        val connection =
+            WallpaperConnection(
+                WeakReference(engineConnection),
+                WeakReference(serviceConnection),
+                WeakReference(wallpaperService),
+                WeakReference(surfaceView.windowToken),
+                debug,
+            )
+        (serviceConnection as WallpaperServiceConnection).deadConnectionListener =
+            object : WallpaperServiceConnection.DeadConnectionListener {
+                override fun onConnectionDead(serviceConnection: ServiceConnection) {
+                    if (debug) Log.d(TAG, "${toHex(this)}: connection dead")
+                    connection.disconnect(context)
+                }
+            }
+        if (isConfigChange) description.content.apply { putBoolean(IS_CONFIG_CHANGE, true) }
+
         // Attach wallpaper connection to service and get wallpaper engine
         engineConnection
             .getEngine(wallpaperService, destinationFlag, surfaceView, description)
-            .apply {
-                surfaceView.viewTreeObserver.addOnWindowVisibilityChangeListener { visibility ->
-                    setVisibility(visibility == View.VISIBLE)
-                }
+            .let { engine ->
+                engine
+                    .asBinder()
+                    ?.linkToDeath(
+                        {
+                            if (debug) Log.d(TAG, "${toHex(this)}: engine dead")
+                            connection.disconnect(context)
+                        },
+                        /* flags= */ 0,
+                    )
             }
+        surfaceView.viewTreeObserver.addOnWindowVisibilityChangeListener { visibility ->
+            try {
+                engineConnection.engine?.setVisibility(visibility == View.VISIBLE)
+            } catch (e: RemoteException) {
+                Log.w(TAG, "Error setting engine visibility", e)
+            }
+        }
+        wallpaperService
+            .asBinder()
+            .linkToDeath(
+                {
+                    if (debug) Log.d(TAG, "${toHex(this)}: service dead")
+                    connection.disconnect(context)
+                },
+                0,
+            )
 
-        return WallpaperConnection(
-            WeakReference(engineConnection),
-            WeakReference(serviceConnection),
-            WeakReference(wallpaperService),
-            WeakReference(surfaceView.windowToken),
-        )
+        if (debug) Log.d(TAG, "${toHex(owner)}: ADD: $connection: $shortKey")
+
+        return connection
     }
 
     // Calculates a unique key for the wallpaper engine instance
@@ -293,7 +454,12 @@ constructor(@ApplicationContext private val context: Context) {
     ): String {
         // This is NOT the right way to do this long term. See b/390731022.
         val multiEngineExt =
-            if (isExtendedEffectWallpaper(context, component)) ":$destinationFlag" else ""
+            if (
+                isExtendedEffectWallpaper(context, component) ||
+                    isLegacyCinematicWallpaper(component)
+            )
+                ":$destinationFlag"
+            else ""
         val keyWithoutSizeInformation =
             this.packageName
                 .plus(":")
@@ -355,9 +521,10 @@ constructor(@ApplicationContext private val context: Context) {
         parentSurface: SurfaceView,
         displayMetrics: Point,
         enforceSingleEngine: Boolean,
+        onPreviewReady: (() -> Unit)?,
     ) {
         fun logError(e: Exception) {
-            Log.e(WallpaperConnection::class.simpleName, "Fail to reparent wallpaper surface", e)
+            Log.e(TAG, "Fail to reparent wallpaper surface", e)
         }
 
         try {
@@ -369,15 +536,19 @@ constructor(@ApplicationContext private val context: Context) {
             val values = getScale(parentSurface, displayMetrics)
             SurfaceControl.Transaction().use { t ->
                 t.setMatrix(
-                    wallpaperSurfaceControl,
-                    if (enforceSingleEngine) values[Matrix.MSCALE_Y] else values[Matrix.MSCALE_X],
-                    values[Matrix.MSKEW_X],
-                    values[Matrix.MSKEW_Y],
-                    values[Matrix.MSCALE_Y],
-                )
-                t.reparent(wallpaperSurfaceControl, parentSurfaceControl)
-                t.show(wallpaperSurfaceControl)
-                t.apply()
+                        wallpaperSurfaceControl,
+                        if (enforceSingleEngine) values[Matrix.MSCALE_Y]
+                        else values[Matrix.MSCALE_X],
+                        values[Matrix.MSKEW_X],
+                        values[Matrix.MSKEW_Y],
+                        values[Matrix.MSCALE_Y],
+                    )
+                    .reparent(wallpaperSurfaceControl, parentSurfaceControl)
+                    .show(wallpaperSurfaceControl)
+                    .addTransactionCompletedListener(bgDispatcher.asExecutor()) { _ ->
+                        onPreviewReady?.invoke()
+                    }
+                    .apply()
             }
         } catch (e: RemoteException) {
             logError(e)
@@ -415,25 +586,69 @@ constructor(@ApplicationContext private val context: Context) {
         return values
     }
 
+    private fun isLegacyCinematicWallpaper(component: ComponentName) =
+        component.packageName == effectsController.effectsPackageName
+
     data class WallpaperConnection(
         val engineConnection: WeakReference<WallpaperEngineConnection>,
         val serviceConnection: WeakReference<ServiceConnection>,
         val wallpaperService: WeakReference<IWallpaperService>,
         val windowToken: WeakReference<IBinder>,
+        val debug: Boolean = false,
     ) {
+        private val disconnected = AtomicBoolean(false)
+
         fun disconnect(context: Context) {
-            engineConnection.get()?.apply {
-                engine?.destroy()
-                removeListener()
-                engine = null
+            if (disconnected.compareAndSet(/* expectedValue= */ false, /* newValue= */ true)) {
+                if (debug) Log.d(TAG, "DSC: $this")
+                engineConnection.get()?.apply {
+                    engine.let {
+                        engine = null
+                        try {
+                            it?.destroy()
+                        } catch (e: RemoteException) {
+                            Log.w(TAG, "Error destroying wallpaper engine", e)
+                        }
+                        removeListener()
+                    }
+                }
+                windowToken.get()?.let { window ->
+                    wallpaperService.get()?.let { service ->
+                        try {
+                            service.detach(window)
+                        } catch (e: RemoteException) {
+                            Log.w(TAG, "Error disconnecting wallpaper service", e)
+                        }
+                    }
+                }
+                serviceConnection.get()?.let {
+                    try {
+                        context.unbindService(it)
+                    } catch (e: RemoteException) {
+                        Log.w(TAG, "Error unbinding service connection", e)
+                    }
+                }
             }
-            windowToken.get()?.let { wallpaperService.get()?.detach(it) }
-            serviceConnection.get()?.let { context.unbindService(it) }
+        }
+
+        override fun toString(): String {
+            return listOf(
+                    "engineConnection serviceConnection wallpaperService windowToken",
+                    toHex(engineConnection.get()),
+                    toHex(serviceConnection.get()),
+                    toHex(wallpaperService.get()),
+                    toHex(windowToken.get()),
+                    (serviceConnection.get() as? WallpaperServiceConnection)
+                        ?.componentName
+                        ?.packageName,
+                )
+                .joinToString()
         }
     }
 
     companion object {
         private const val TAG = "WallpaperConnectionUtils"
+        private const val IS_CONFIG_CHANGE = "_picker_isConfigChange"
 
         data class EngineRenderingConfig(
             val enforceSingleEngine: Boolean,
@@ -463,11 +678,12 @@ constructor(@ApplicationContext private val context: Context) {
             return when {
                 creativeWallpaperData != null -> false
                 liveWallpaperData.isEffectWallpaper -> false
-                else -> true // Only fallback to single engine rendering for legacy live wallpapers
+                else -> !liveWallpaperData.supportsMultipleEngines
             }
         }
 
-        fun isExtendedEffectWallpaper(context: Context, component: ComponentName) =
-            component.packageName == context.getString(R.string.extended_wallpaper_effects_package)
+        fun toHex(o: Any?): String {
+            return o.hashCode().toString(16).padStart(7, '0')
+        }
     }
 }

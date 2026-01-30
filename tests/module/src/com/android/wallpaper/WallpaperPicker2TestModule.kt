@@ -18,9 +18,11 @@ package com.android.wallpaper
 import com.android.wallpaper.effects.EffectsController
 import com.android.wallpaper.effects.FakeEffectsController
 import com.android.wallpaper.module.DefaultRecentWallpaperManager
+import com.android.wallpaper.module.DefaultThirdPartyLiveWallpaperModelFactory
 import com.android.wallpaper.module.Injector
 import com.android.wallpaper.module.PartnerProvider
 import com.android.wallpaper.module.RecentWallpaperManager
+import com.android.wallpaper.module.ThirdPartyLiveWallpaperModelFactory
 import com.android.wallpaper.module.WallpaperPreferences
 import com.android.wallpaper.module.logging.TestUserEventLogger
 import com.android.wallpaper.module.logging.UserEventLogger
@@ -38,8 +40,14 @@ import com.android.wallpaper.picker.common.preview.ui.binder.DefaultWorkspaceCal
 import com.android.wallpaper.picker.common.preview.ui.binder.WorkspaceCallbackBinder
 import com.android.wallpaper.picker.customization.ui.binder.CustomizationOptionsBinder
 import com.android.wallpaper.picker.customization.ui.binder.DefaultCustomizationOptionsBinder
+import com.android.wallpaper.picker.customization.ui.binder.DefaultPackThemeSuggestedEntryBinder
 import com.android.wallpaper.picker.customization.ui.binder.DefaultToolbarBinder
+import com.android.wallpaper.picker.customization.ui.binder.PackThemeSuggestedEntryBinder
 import com.android.wallpaper.picker.customization.ui.binder.ToolbarBinder
+import com.android.wallpaper.picker.customization.ui.util.CustomizationOptionUtil
+import com.android.wallpaper.picker.customization.ui.util.DefaultCustomizationOptionUtil
+import com.android.wallpaper.picker.preview.ui.binder.ApplyWallpaperOptionsProvider
+import com.android.wallpaper.picker.preview.ui.binder.DefaultApplyWallpaperOptionsProvider
 import com.android.wallpaper.picker.preview.ui.util.DefaultImageEffectDialogUtil
 import com.android.wallpaper.picker.preview.ui.util.ImageEffectDialogUtil
 import com.android.wallpaper.testing.FakeCategoryInteractor
@@ -103,6 +111,12 @@ abstract class WallpaperPicker2TestModule {
 
     @Binds
     @Singleton
+    abstract fun bindCustomizationOptionUtil(
+        impl: DefaultCustomizationOptionUtil
+    ): CustomizationOptionUtil
+
+    @Binds
+    @Singleton
     abstract fun bindDefaultPhotosErrorConvertor(
         impl: FakeDefaultPhotosErrorConvertor
     ): PhotosErrorConvertor
@@ -120,6 +134,12 @@ abstract class WallpaperPicker2TestModule {
     abstract fun bindOnDeviceWallpapersInteractor(
         impl: FakeOnDeviceWallpapersInteractor
     ): OnDeviceWallpapersInteractor
+
+    @Binds
+    @Singleton
+    abstract fun bindPackThemeSuggestedEntryBinder(
+        impl: DefaultPackThemeSuggestedEntryBinder
+    ): PackThemeSuggestedEntryBinder
 
     @Binds @Singleton abstract fun bindPartnerProvider(impl: TestPartnerProvider): PartnerProvider
 
@@ -162,4 +182,16 @@ abstract class WallpaperPicker2TestModule {
     abstract fun bindRecentWallpaperManager(
         impl: DefaultRecentWallpaperManager
     ): RecentWallpaperManager
+
+    @Binds
+    @Singleton
+    abstract fun bindApplyWallpaperOptionsProvider(
+        impl: DefaultApplyWallpaperOptionsProvider
+    ): ApplyWallpaperOptionsProvider
+
+    @Binds
+    @Singleton
+    abstract fun bindThirdPartyLiveWallpaperModelFactory(
+        impl: DefaultThirdPartyLiveWallpaperModelFactory
+    ): ThirdPartyLiveWallpaperModelFactory
 }

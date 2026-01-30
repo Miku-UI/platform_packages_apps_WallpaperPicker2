@@ -16,5 +16,18 @@
 
 package com.android.wallpaper.picker.data.category
 
+import android.graphics.drawable.Drawable
+import com.android.wallpaper.picker.data.WallpaperModel
+
 /** Represents set of attributes that are common for all categories. */
-data class CommonCategoryData(val title: String, val collectionId: String, val priority: Int)
+data class CommonCategoryData(
+    val title: String,
+    val collectionId: String,
+    val priority: Int,
+    val thumbnailDrawable: Drawable? = null,
+
+    /**
+     * This lambda retrieves the associated collection of [WallpaperModel] for this [CategoryModel]
+     */
+    val fetchWallpapers: (suspend (collectionId: String) -> List<WallpaperModel>?)? = null,
+)

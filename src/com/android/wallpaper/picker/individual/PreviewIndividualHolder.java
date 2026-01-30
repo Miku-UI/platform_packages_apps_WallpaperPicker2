@@ -22,11 +22,12 @@ import android.app.Activity;
 import android.util.Log;
 import android.view.View;
 
+import com.android.wallpaper.model.InlinePreviewIntentFactory;
 import com.android.wallpaper.model.LiveWallpaperInfo;
 import com.android.wallpaper.model.WallpaperInfo;
 import com.android.wallpaper.module.InjectorProvider;
 import com.android.wallpaper.module.WallpaperPersister;
-import com.android.wallpaper.picker.category.ui.viewmodel.CategoriesViewModel;
+import com.android.wallpaper.picker.customization.shared.model.CategoryType;
 
 /**
  * IndividualHolder subclass for a wallpaper tile in the RecyclerView for which a click should
@@ -36,14 +37,16 @@ class PreviewIndividualHolder extends IndividualHolder implements View.OnClickLi
     private static final String TAG = "PreviewIndividualHolder";
 
     private WallpaperPersister mWallpaperPersister;
-    CategoriesViewModel.CategoryType mCategoryType;
+    CategoryType mCategoryType;
+    boolean mViewAsHome = true;
 
     public PreviewIndividualHolder(
             Activity hostActivity, int tileHeightPx, View itemView,
-            CategoriesViewModel.CategoryType categoryType) {
+            CategoryType categoryType, boolean viewAsHome) {
         super(hostActivity, tileHeightPx, tileHeightPx, itemView);
         mTileLayout.setOnClickListener(this);
         mCategoryType = categoryType;
+        mViewAsHome = viewAsHome;
         mWallpaperPersister = InjectorProvider.getInjector().getWallpaperPersister(hostActivity);
     }
 
@@ -61,12 +64,14 @@ class PreviewIndividualHolder extends IndividualHolder implements View.OnClickLi
      */
     private void showPreview(WallpaperInfo wallpaperInfo) {
         mWallpaperPersister.setWallpaperInfoInPreview(wallpaperInfo);
-
+        InlinePreviewIntentFactory previewIntentFactory = InjectorProvider.getInjector()
+                .getPreviewActivityIntentFactory();
+        previewIntentFactory.setViewAsHome(mViewAsHome);
         wallpaperInfo.showPreview(mActivity,
-                InjectorProvider.getInjector().getPreviewActivityIntentFactory(),
+                previewIntentFactory,
                 wallpaperInfo instanceof LiveWallpaperInfo ? PREVIEW_LIVE_WALLPAPER_REQUEST_CODE
                         : PREVIEW_WALLPAPER_REQUEST_CODE, true,
-                (mCategoryType == CategoriesViewModel.CategoryType.CreativeCategories));
+                (mCategoryType == CategoryType.CreativeCategories));
     }
 
 }

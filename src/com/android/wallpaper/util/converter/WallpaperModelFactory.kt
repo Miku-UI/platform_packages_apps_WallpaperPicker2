@@ -35,7 +35,7 @@ import com.android.wallpaper.picker.data.ImageWallpaperData
 import com.android.wallpaper.picker.data.LiveWallpaperData
 import com.android.wallpaper.picker.data.WallpaperId
 import com.android.wallpaper.picker.data.WallpaperModel
-import com.android.wallpaper.util.wallpaperconnection.WallpaperConnectionUtils.Companion.isExtendedEffectWallpaper
+import com.android.wallpaper.util.ExtendedWallpaperEffectsUtils.isExtendedEffectWallpaper
 
 /** This class creates an instance of [WallpaperModel] from a given [WallpaperInfo] object. */
 interface WallpaperModelFactory {
@@ -126,6 +126,11 @@ interface WallpaperModelFactory {
                 effectNames = effectNames,
                 contextDescription = contextDescription,
                 description = wallpaperDescription,
+                supportsMultipleEngines =
+                    info.serviceInfo.metaData?.getBoolean(
+                        LiveWallpaperInfo.MULTIPLE_ENGINE_METADATA_NAME,
+                        false,
+                    ) ?: false,
             )
         }
 

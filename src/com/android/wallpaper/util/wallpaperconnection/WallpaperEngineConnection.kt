@@ -1,6 +1,5 @@
 package com.android.wallpaper.util.wallpaperconnection
 
-import android.app.Flags.liveWallpaperContentHandling
 import android.app.WallpaperColors
 import android.app.WallpaperInfo
 import android.app.wallpaper.WallpaperDescription
@@ -29,6 +28,7 @@ class WallpaperEngineConnection(
 ) : IWallpaperConnection.Stub() {
 
     var engine: IWallpaperEngine? = null
+
     private var engineContinuation: CancellableContinuation<IWallpaperEngine>? = null
     private var listener: WallpaperEngineConnectionListener? = null
 
@@ -57,9 +57,13 @@ class WallpaperEngineConnection(
         // passed in attachEngine callback for WallpaperEngineConnection.
         this.engine = engine
         engine?.apply {
-            setVisibility(true)
-            resizePreview(Rect(0, 0, displayMetrics.x, displayMetrics.y))
-            requestWallpaperColors()
+            try {
+                setVisibility(true)
+                resizePreview(Rect(0, 0, displayMetrics.x, displayMetrics.y))
+                requestWallpaperColors()
+            } catch (e: RemoteException) {
+                Log.w(TAG, "Error in attachEngine", e)
+            }
         }
     }
 
@@ -154,12 +158,10 @@ class WallpaperEngineConnection(
                     is NoSuchMethodException,
                     is InvocationTargetException,
                     is IllegalAccessException -> {
-                        if (liveWallpaperContentHandling()) {
-                            Log.w(
-                                TAG,
-                                "live wallpaper content handling enabled, but pre-U attach method called",
-                            )
-                        }
+                        Log.w(
+                            TAG,
+                            "live wallpaper content handling enabled, but pre-U attach method called",
+                        )
                         return false
                     }
 
@@ -212,12 +214,10 @@ class WallpaperEngineConnection(
                     is NoSuchMethodException,
                     is InvocationTargetException,
                     is IllegalAccessException -> {
-                        if (liveWallpaperContentHandling()) {
-                            Log.w(
-                                TAG,
-                                "live wallpaper content handling enabled, but pre-B attach method called",
-                            )
-                        }
+                        Log.w(
+                            TAG,
+                            "live wallpaper content handling enabled, but pre-B attach method called",
+                        )
                         return false
                     }
 
@@ -238,16 +238,25 @@ class WallpaperEngineConnection(
             surfaceView: SurfaceView,
             description: WallpaperDescription,
         ) {
-            if (
-                tryPreUAttach(
+            try {
+                wallpaperService.attach(
                     wallpaperEngineConnection,
-                    wallpaperService,
+                    surfaceView.windowToken,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA,
+                    true,
+                    surfaceView.width,
+                    surfaceView.height,
+                    Rect(0, 0, 0, 0),
+                    surfaceView.display.displayId,
                     destinationFlag,
-                    surfaceView,
+                    null,
+                    description,
                 )
-            ) {
                 return
+            } catch (e: NoSuchMethodError) {
+                Log.w(TAG, "Error calling Baklava version of attach, trying previous versions", e)
             }
+
             if (
                 tryPreBAttach(
                     wallpaperEngineConnection,
@@ -259,19 +268,16 @@ class WallpaperEngineConnection(
                 return
             }
 
-            wallpaperService.attach(
-                wallpaperEngineConnection,
-                surfaceView.windowToken,
-                WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA,
-                true,
-                surfaceView.width,
-                surfaceView.height,
-                Rect(0, 0, 0, 0),
-                surfaceView.display.displayId,
-                destinationFlag,
-                null,
-                description,
-            )
+            if (
+                tryPreUAttach(
+                    wallpaperEngineConnection,
+                    wallpaperService,
+                    destinationFlag,
+                    surfaceView,
+                )
+            ) {
+                return
+            }
         }
     }
 

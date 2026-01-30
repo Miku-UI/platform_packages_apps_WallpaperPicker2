@@ -18,9 +18,10 @@ package com.android.wallpaper.picker.customization.ui.viewmodel
 
 import android.annotation.ColorInt
 import android.content.Context
+import android.content.theming.ThemeStyle
 import com.android.customization.picker.mode.data.repository.DarkModeStateRepository
 import com.android.systemui.monet.ColorScheme
-import com.android.systemui.monet.Style
+import com.android.systemui.monet.CustomDynamicColors
 import com.android.wallpaper.R
 import com.google.ux.material.libmonet.dynamiccolor.DynamicColor
 import com.google.ux.material.libmonet.dynamiccolor.DynamicScheme
@@ -179,7 +180,13 @@ constructor(
             },
         )
 
-    fun previewColors(@ColorInt colorSeed: Int, @Style.Type style: Int, isDarkMode: Boolean) {
+    // Custom colors
+    val themedIconColor =
+        createColorFlow(R.color.themed_icon_color, CustomDynamicColors().onThemeApp())
+    val themedIconBackgroundColor =
+        createColorFlow(R.color.themed_icon_background_color, CustomDynamicColors().themeApp())
+
+    fun previewColors(@ColorInt colorSeed: Int, @ThemeStyle.Type style: Int, isDarkMode: Boolean) {
         previewingColorScheme.value = ColorScheme(colorSeed, isDarkMode, style).materialScheme
         previewingIsDarkMode.value = isDarkMode
     }
@@ -222,5 +229,9 @@ constructor(
         override fun onCleared() {
             coroutineContext.cancel()
         }
+    }
+
+    companion object {
+        const val COLOR_ANIMATION_DURATION_MILLIS = 500L
     }
 }

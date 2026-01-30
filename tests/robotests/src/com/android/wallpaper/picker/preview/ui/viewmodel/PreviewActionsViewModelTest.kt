@@ -24,6 +24,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.platform.test.annotations.EnableFlags
 import androidx.activity.result.ActivityResultLauncher
 import androidx.test.core.app.ActivityScenario
 import com.android.wallpaper.effects.Effect
@@ -39,6 +40,7 @@ import com.android.wallpaper.picker.preview.domain.interactor.PreviewActionsInte
 import com.android.wallpaper.picker.preview.domain.interactor.WallpaperPreviewInteractor
 import com.android.wallpaper.picker.preview.shared.model.ImageEffectsModel
 import com.android.wallpaper.picker.preview.ui.util.LiveWallpaperDeleteUtil
+import com.android.wallpaper.testing.FakeExtendedEffectsHelper
 import com.android.wallpaper.testing.FakeImageEffectsRepository
 import com.android.wallpaper.testing.FakeLiveWallpaperDownloader
 import com.android.wallpaper.testing.ShadowWallpaperInfo
@@ -46,6 +48,7 @@ import com.android.wallpaper.testing.TestInjector
 import com.android.wallpaper.testing.TestWallpaperPreferences
 import com.android.wallpaper.testing.WallpaperModelUtils
 import com.android.wallpaper.testing.collectLastValue
+import com.android.wallpaper.util.wallpaperconnection.WallpaperConnectionUtils
 import com.google.common.truth.Truth.assertThat
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -58,6 +61,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Before
@@ -80,7 +84,6 @@ class PreviewActionsViewModelTest {
     private lateinit var underTest: PreviewActionsViewModel
     private lateinit var scenario: ActivityScenario<PreviewTestActivity>
     private lateinit var activityResultLauncher: ActivityResultLauncher<Intent>
-    private lateinit var wallpaperPreviewInteractor: WallpaperPreviewInteractor
 
     @Inject lateinit var testDispatcher: TestDispatcher
     @Inject lateinit var wallpaperPreferences: TestWallpaperPreferences
@@ -114,6 +117,8 @@ class PreviewActionsViewModelTest {
     @InstallIn(ActivityComponent::class)
     interface ActivityScopeEntryPoint {
         fun interactor(): WallpaperPreviewInteractor
+
+        fun wallpaperConnectionUtils(): WallpaperConnectionUtils
     }
 
     private fun setEverything(activity: PreviewTestActivity) {
@@ -129,9 +134,12 @@ class PreviewActionsViewModelTest {
                     CreativeEffectsRepository(appContext, testDispatcher),
                     DownloadableWallpaperRepository(liveWallpaperDownloader),
                 ),
+                activityScopeEntryPoint.wallpaperConnectionUtils(),
                 activityScopeEntryPoint.interactor(),
                 liveWallpaperDeleteUtil,
+                FakeExtendedEffectsHelper(),
                 appContext,
+                TestScope(testDispatcher),
             )
     }
 
@@ -157,6 +165,16 @@ class PreviewActionsViewModelTest {
     }
 
     @Test
+    fun isInformationVisible_invisibleWhenHideInformationSheetIsTrue() = runTest {
+        val model = WallpaperModelUtils.getStaticWallpaperModel("testId", "testCollection")
+        wallpaperPreviewRepository.setWallpaperModel(model)
+        underTest.hideInformationFloatingSheet.value = true
+
+        val isInformationButtonVisible = collectLastValue(underTest.isInformationVisible)
+        assertThat(isInformationButtonVisible()).isFalse()
+    }
+
+    @Test
     fun isInformationVisible_invisibleWhenActionUrlNull() = runTest {
         val model = WallpaperModelUtils.getStaticWallpaperModel("testId", "testCollection")
         wallpaperPreviewRepository.setWallpaperModel(model)
@@ -168,6 +186,24 @@ class PreviewActionsViewModelTest {
                 "testId",
                 "testCollection",
                 actionUrl = null,
+            )
+        )
+        assertThat(isInformationButtonVisible()).isFalse()
+    }
+
+    @Test
+    @EnableFlags(com.android.systemui.shared.Flags.FLAG_EXTENDED_WALLPAPER_EFFECTS)
+    fun isInformationVisible_invisibleWhenValidUri() = runTest {
+        val model = WallpaperModelUtils.getStaticWallpaperModel("testId", "testCollection")
+        wallpaperPreviewRepository.setWallpaperModel(model)
+
+        val isInformationButtonVisible = collectLastValue(underTest.isInformationVisible)
+
+        wallpaperPreviewRepository.setWallpaperModel(
+            WallpaperModelUtils.getStaticWallpaperModel(
+                "testId",
+                "testCollection",
+                imageWallpaperUri = Uri.parse("test"),
             )
         )
         assertThat(isInformationButtonVisible()).isFalse()
